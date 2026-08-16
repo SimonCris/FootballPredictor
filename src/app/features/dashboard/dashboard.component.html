@@ -1,0 +1,296 @@
+<main class="dashboard">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Football Predictor</p>
+      <h1>Pronostici calcistici</h1>
+    </div>
+    <button class="primary-btn" (click)="loadData()">Aggiorna dati</button>
+  </header>
+
+  <section class="stats-grid">
+    <article class="stat-card">
+      <span>Partite analizzate</span>
+      <strong>{{ predictions.length }}</strong>
+    </article>
+    <article class="stat-card">
+      <span>Media confidence</span>
+      <strong>{{ averageConfidence }}%</strong>
+    </article>
+    <article class="stat-card">
+      <span>Leghe monitorate</span>
+      <strong>{{ competitions.length - 1 }}</strong>
+    </article>
+  </section>
+
+  <section class="home-panel">
+    <div class="home-panel-header">
+      <div>
+        <p class="eyebrow">Home</p>
+        <h2>Seleziona campionato</h2>
+      </div>
+      <button class="primary-btn" type="button" (click)="searchRoundFixtures()">Cerca</button>
+    </div>
+
+    <div class="filter-row">
+      <div>
+        <label for="leagueSelect">Campionato</label>
+        <select id="leagueSelect" [(ngModel)]="selectedLeague">
+          <option value="All">Tutti</option>
+          <option *ngFor="let competition of competitions" [value]="competition" [disabled]="competition === 'All'">{{ competition }}</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="round-panel" *ngIf="nextRoundFixtures.length; else noRoundFixtures">
+    <div class="section-header">
+      <h2>Prossimo turno</h2>
+      <span>{{ selectedLeague === 'All' ? 'Tutte le leghe' : selectedLeague }}</span>
+    </div>
+
+    <div class="quote-table-wrap">
+      <table class="quote-table">
+        <thead>
+          <tr>
+            <th>Partita</th>
+            <th>Giornata</th>
+            <th>Data</th>
+            <th>Pronostico</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let match of nextRoundFixtures">
+            <td>{{ match.homeTeam }} vs {{ match.awayTeam }}</td>
+            <td>{{ match.round }}</td>
+            <td>{{ formatDate(match.kickoff) }}</td>
+            <td>
+              <button class="secondary-btn" type="button" (click)="openForecast(match.id)">Pronostico</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <ng-template #noRoundFixtures>
+    <section class="round-panel empty-state">
+      <h2>Nessuna partita disponibile</h2>
+      <p>Non ci sono partite prossime per la selezione attuale.</p>
+    </section>
+  </ng-template>
+
+  <section class="forecast-panel" *ngIf="selectedForecastPreview && selectedForecastMatch">
+    <div class="section-header">
+      <h2>Pronostico partita</h2>
+      <button class="ghost-btn" type="button" (click)="selectedForecastId = ''">Chiudi</button>
+    </div>
+
+    <div class="selected-match-header">
+      <h3>{{ selectedForecastPreview.homeTeam }} vs {{ selectedForecastPreview.awayTeam }}</h3>
+      <span>{{ formatDate(selectedForecastPreview.kickoff) }}</span>
+    </div>
+
+    <div class="probability-wrap">
+      <div class="bar-chart">
+        <div *ngFor="let bar of getProbabilityBars(selectedForecastPreview)" class="bar-group">
+          <div class="bar-label">{{ bar.label }}</div>
+          <div class="bar-track">
+            <div class="bar-fill" [ngClass]="bar.color" [style.width.%]="bar.value"></div>
+          </div>
+          <div class="bar-value">{{ bar.value | number: '1.0-1' }}%</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="feature-grid" *ngIf="forecastFeatureSummary">
+      <div class="feature-box">
+        <h3>{{ selectedForecastMatch.homeTeam }}</h3>
+        <p>Forma: {{ forecastFeatureSummary.home.form.slice(0, 4).join(' · ') }}</p>
+        <p>xG: {{ forecastFeatureSummary.home.xg }} | xGA: {{ forecastFeatureSummary.home.xga }}</p>
+        <p>Possesso: {{ forecastFeatureSummary.home.possession }}%</p>
+      </div>
+      <div class="feature-box">
+        <h3>{{ selectedForecastMatch.awayTeam }}</h3>
+        <p>Forma: {{ forecastFeatureSummary.away.form.slice(0, 4).join(' · ') }}</p>
+        <p>xG: {{ forecastFeatureSummary.away.xg }} | xGA: {{ forecastFeatureSummary.away.xga }}</p>
+        <p>Possesso: {{ forecastFeatureSummary.away.possession }}%</p>
+      </div>
+    </div>
+
+    <ul class="reason-list">
+      <li *ngFor="let reason of selectedForecastPreview.reason">{{ reason }}</li>
+    </ul>
+  </section>
+
+  <section class="toolbar-panel">
+    <div class="filter-row">
+      <div>
+        <label for="competitionFilter">Competizione</label>
+        <select id="competitionFilter" [(ngModel)]="selectedCompetition" (change)="applyCompetitionFilter()">
+          <option *ngFor="let competition of competitions" [value]="competition">{{ competition }}</option>
+        </select>
+      </div>
+      <div>
+        <label for="marketFilter">Tipo pronostico</label>
+        <select id="marketFilter" [(ngModel)]="selectedMarket" (change)="applyMarketFilter()">
+          <option *ngFor="let market of marketOptions" [value]="market">{{ market === 'all' ? 'Tutti' : market }}</option>
+        </select>
+      </div>
+      <div>
+        <label for="sortFilter">Ordina per</label>
+        <select id="sortFilter" [(ngModel)]="selectedSort" (change)="onSortChange()">
+          <option *ngFor="let sort of sortOptions" [value]="sort">{{ sort === 'confidence' ? 'Confidence' : sort === 'value' ? 'Valore' : 'Data kickoff' }}</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="top-picks" *ngIf="topPicks.length">
+    <h2>Top picks</h2>
+    <div class="pick-grid">
+      <article *ngFor="let pick of topPicks; let index = index" class="pick-card" [class.is-selected]="selectedPredictionId === pick.id" (click)="selectPrediction(pick.id)">
+        <span class="pick-rank">#{{ index + 1 }}</span>
+        <h3>{{ pick.homeTeam }} vs {{ pick.awayTeam }}</h3>
+        <p>{{ pick.homeWin * 100 | number: '1.0-0' }}% 1X2</p>
+        <p>Confidence: {{ pick.confidence }}%</p>
+      </article>
+    </div>
+  </section>
+
+  <section *ngIf="selectedPrediction && selectedMatch && featureSummary" class="analysis-panel">
+    <h2>Analisi avanzata</h2>
+    <div class="feature-grid">
+      <div class="feature-box">
+        <h3>{{ selectedMatch.homeTeam }}</h3>
+        <p>Forma: {{ featureSummary.home.form.slice(0, 4).join(' · ') }}</p>
+        <p>xG: {{ featureSummary.home.xg }} | xGA: {{ featureSummary.home.xga }}</p>
+        <p>Possesso: {{ featureSummary.home.possession }}%</p>
+      </div>
+      <div class="feature-box">
+        <h3>{{ selectedMatch.awayTeam }}</h3>
+        <p>Forma: {{ featureSummary.away.form.slice(0, 4).join(' · ') }}</p>
+        <p>xG: {{ featureSummary.away.xg }} | xGA: {{ featureSummary.away.xga }}</p>
+        <p>Possesso: {{ featureSummary.away.possession }}%</p>
+      </div>
+    </div>
+
+    <div class="feature-metrics">
+      <span>Delta forma: {{ featureSummary.formDelta | number: '1.1-1' }}</span>
+      <span>Delta xG: {{ featureSummary.xgDelta | number: '1.1-1' }}</span>
+      <span>Delta goal difference: {{ featureSummary.goalsDelta }}</span>
+    </div>
+  </section>
+
+  <section *ngIf="selectedPrediction" class="analysis-panel">
+    <h2>Probabilità match</h2>
+    <div class="selected-match-header">
+      <h3>{{ selectedPrediction.homeTeam }} vs {{ selectedPrediction.awayTeam }}</h3>
+      <span>{{ formatDate(selectedPrediction.kickoff) }}</span>
+    </div>
+    <div class="probability-wrap">
+      <div class="bar-chart">
+        <div *ngFor="let bar of getProbabilityBars(selectedPrediction)" class="bar-group">
+          <div class="bar-label">{{ bar.label }}</div>
+          <div class="bar-track">
+            <div class="bar-fill" [ngClass]="bar.color" [style.width.%]="bar.value"></div>
+          </div>
+          <div class="bar-value">{{ bar.value | number: '1.0-1' }}%</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section *ngIf="valueBets.length" class="analysis-panel">
+    <h2>Value Bet</h2>
+    <div class="quote-table-wrap">
+      <table class="quote-table">
+        <thead>
+          <tr>
+            <th>Match</th>
+            <th>Market</th>
+            <th>Probabilità</th>
+            <th>Odds</th>
+            <th>EV</th>
+            <th>Edge</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let row of valueBets">
+            <td>{{ row.match }}</td>
+            <td>{{ row.market }}</td>
+            <td>{{ row.probability }}%</td>
+            <td>{{ row.odds }}</td>
+            <td>{{ row.expectedValue }}</td>
+            <td [class.positive]="row.edge > 0" [class.negative]="row.edge < 0">{{ row.edge }}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="analysis-panel">
+    <h2>Team analytics</h2>
+    <div class="team-grid">
+      <article *ngFor="let team of teamAnalytics" class="team-card">
+        <h3>{{ team.name }}</h3>
+        <p>Forma: {{ team.form | number: '1.1-1' }}</p>
+        <p>xG: {{ team.xg }} | xGA: {{ team.xga }}</p>
+        <p>Possesso: {{ team.possession }}%</p>
+        <p>Trend: {{ team.trend }}</p>
+        <p>Rating: {{ team.rating }}</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="backtest-panel">
+    <h2>Backtest</h2>
+    <div class="backtest-grid">
+      <div class="backtest-card">
+        <span>Match</span>
+        <strong>{{ backtest.total }}</strong>
+      </div>
+      <div class="backtest-card">
+        <span>Accuracy</span>
+        <strong>{{ backtest.accuracy }}%</strong>
+      </div>
+      <div class="backtest-card">
+        <span>Avg confidence</span>
+        <strong>{{ backtest.avgConfidence }}%</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="matches">
+    <h2>Match del giorno</h2>
+
+    <article *ngFor="let prediction of filteredPredictions" class="match-card" [class.selected]="selectedPredictionId === prediction.id" (click)="selectPrediction(prediction.id)">
+      <div class="teams">
+        <div>
+          <span class="badge home">Casa</span>
+          <h3>{{ prediction.homeTeam }}</h3>
+        </div>
+        <div class="score">{{ prediction.homeWin * 100 | number: '1.0-0' }}%</div>
+        <div>
+          <span class="badge away">Trasferta</span>
+          <h3>{{ prediction.awayTeam }}</h3>
+        </div>
+      </div>
+
+      <div class="meta">
+        <span>1X2: {{ prediction.homeWin * 100 | number: '1.0-0' }}% - {{ prediction.draw * 100 | number: '1.0-0' }}% - {{ prediction.awayWin * 100 | number: '1.0-0' }}%</span>
+        <span>Confidence: {{ prediction.confidence }}%</span>
+      </div>
+
+      <div class="detail-row">
+        <span>Over 2.5: {{ prediction.over25 * 100 | number: '1.0-0' }}%</span>
+        <span>Under 2.5: {{ prediction.under25 * 100 | number: '1.0-0' }}%</span>
+      </div>
+
+      <ul class="reason-list">
+        <li *ngFor="let reason of prediction.reason">{{ reason }}</li>
+      </ul>
+
+      <div class="date-line">{{ formatDate(prediction.kickoff) }} · {{ prediction.venue }}</div>
+    </article>
+  </section>
+</main>

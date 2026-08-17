@@ -1,0 +1,84 @@
+<h2 mat-dialog-title>
+  <ng-container *ngIf="match">{{ match.homeTeam.name }} vs {{ match.awayTeam.name }}</ng-container>
+  <ng-container *ngIf="!match">Dettaglio partita</ng-container>
+</h2>
+
+<mat-dialog-content>
+  <div class="loading-row" *ngIf="loading">
+    <mat-spinner diameter="32"></mat-spinner>
+    <span>Calcolo pronostico in corso…</span>
+  </div>
+
+  <p *ngIf="error" class="error-text">{{ error }}</p>
+
+  <div *ngIf="prediction && match">
+    <h3>Probabilità esito (1X2)</h3>
+    <div class="probabilities-row">
+      <div class="prob-box" [class.highlight]="prediction.suggestedOutcome === '1'">
+        <span class="label">1</span>
+        <span class="value">{{ prediction.probabilities.home }}%</span>
+      </div>
+      <div class="prob-box" [class.highlight]="prediction.suggestedOutcome === 'X'">
+        <span class="label">X</span>
+        <span class="value">{{ prediction.probabilities.draw }}%</span>
+      </div>
+      <div class="prob-box" [class.highlight]="prediction.suggestedOutcome === '2'">
+        <span class="label">2</span>
+        <span class="value">{{ prediction.probabilities.away }}%</span>
+      </div>
+    </div>
+
+    <p class="suggestion">
+      <strong>Pronostico consigliato:</strong> {{ outcomeLabel(prediction.suggestedOutcome) }}
+      — Quota stimata: <strong>{{ prediction.estimatedOdds }}</strong>
+      — Confidenza: <strong>{{ prediction.confidence }}/100</strong>
+    </p>
+
+    <p class="suggestion">
+      <strong>Over/Under 2.5 gol:</strong>
+      {{ prediction.overUnder.suggestion === 'OVER_2_5' ? 'Over 2.5' : 'Under 2.5' }}
+      (gol attesi totali: {{ prediction.overUnder.expectedTotalGoals }})
+    </p>
+
+    <mat-divider></mat-divider>
+
+    <h3>Statistiche usate per il pronostico</h3>
+    <div class="stats-grid">
+      <div>
+        <h4>{{ match.homeTeam.name }} (casa)</h4>
+        <p>Forma recente: {{ prediction.stats.homeForm.lastResults.join(' - ') || 'n/d' }}</p>
+        <p>Media gol fatti: {{ prediction.stats.homeForm.goalsScoredAvg }}</p>
+        <p>Media gol subiti: {{ prediction.stats.homeForm.goalsConcededAvg }}</p>
+      </div>
+      <div>
+        <h4>{{ match.awayTeam.name }} (trasferta)</h4>
+        <p>Forma recente: {{ prediction.stats.awayForm.lastResults.join(' - ') || 'n/d' }}</p>
+        <p>Media gol fatti: {{ prediction.stats.awayForm.goalsScoredAvg }}</p>
+        <p>Media gol subiti: {{ prediction.stats.awayForm.goalsConcededAvg }}</p>
+      </div>
+    </div>
+
+    <h4>Scontri diretti</h4>
+    <p>
+      Totale: {{ prediction.stats.headToHead.totalMatches }} —
+      Vittorie casa: {{ prediction.stats.headToHead.homeWins }} —
+      Pareggi: {{ prediction.stats.headToHead.draws }} —
+      Vittorie trasferta: {{ prediction.stats.headToHead.awayWins }}
+    </p>
+
+    <div *ngIf="prediction.stats.injuries">
+      <h4>Infortuni / squalifiche</h4>
+      <p>Casa: {{ prediction.stats.injuries.home.join(', ') || 'nessuno noto' }}</p>
+      <p>Trasferta: {{ prediction.stats.injuries.away.join(', ') || 'nessuno noto' }}</p>
+    </div>
+
+    <div *ngIf="prediction.debugMetrics" class="debug-box">
+      <h4>Metriche di debug (solo sviluppo)</h4>
+      <pre>{{ prediction.debugMetrics | json }}</pre>
+    </div>
+  </div>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="close()">Chiudi</button>
+</mat-dialog-actions>

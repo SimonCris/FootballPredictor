@@ -1,0 +1,35 @@
+.spacer {
+  flex: 1 1 auto;
+}
+
+.page-container {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.combined-odds {
+  font-size: 16px;
+}
+
+.chart-card {
+  padding: 16px;
+}
+
+.full-width-table {
+  width: 100%;
+}
+
+.empty-state {
+  padding: 16px;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.6);
+}

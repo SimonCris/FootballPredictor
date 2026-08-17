@@ -1,0 +1,103 @@
+<mat-toolbar color="primary">
+  <span>⚽ Football Predictor</span>
+  <span class="spacer"></span>
+  <a mat-button routerLink="/top-predictions">
+    <mat-icon>leaderboard</mat-icon>
+    Top Pronostici
+  </a>
+</mat-toolbar>
+
+<div class="page-container">
+  <mat-card class="search-card">
+    <mat-card-content class="search-row">
+      <mat-form-field appearance="outline" class="league-select">
+        <mat-label>Campionato</mat-label>
+        <mat-select [(ngModel)]="selectedLeagueCode" [disabled]="loadingLeagues">
+          <mat-option *ngFor="let league of leagues" [value]="league.code">
+            {{ league.name }} ({{ league.country }})
+          </mat-option>
+        </mat-select>
+      </mat-form-field>
+
+      <button
+        mat-raised-button
+        color="primary"
+        (click)="search()"
+        [disabled]="loadingMatches || loadingLeagues"
+      >
+        <mat-icon>search</mat-icon>
+        Cerca
+      </button>
+
+      <mat-spinner *ngIf="loadingMatches" diameter="28"></mat-spinner>
+    </mat-card-content>
+  </mat-card>
+
+  <mat-card *ngIf="hasSearched" class="results-card">
+    <table mat-table [dataSource]="matches" class="mat-elevation-z2 full-width-table">
+      <ng-container matColumnDef="date">
+        <th mat-header-cell *matHeaderCellDef>Data</th>
+        <td mat-cell *matCellDef="let match">{{ matchDate(match) | date: 'dd/MM/yyyy' }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="time">
+        <th mat-header-cell *matHeaderCellDef>Ora</th>
+        <td mat-cell *matCellDef="let match">{{ matchDate(match) | date: 'HH:mm' }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="home">
+        <th mat-header-cell *matHeaderCellDef>Squadra Casa</th>
+        <td mat-cell *matCellDef="let match">{{ match.homeTeam.name }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="away">
+        <th mat-header-cell *matHeaderCellDef>Squadra Trasferta</th>
+        <td mat-cell *matCellDef="let match">{{ match.awayTeam.name }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="venue">
+        <th mat-header-cell *matHeaderCellDef>Stadio</th>
+        <td mat-cell *matCellDef="let match">{{ match.venue || '—' }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="odds">
+        <th mat-header-cell *matHeaderCellDef>Quota stimata</th>
+        <td mat-cell *matCellDef="let match">
+          <span *ngIf="oddsByMatchId[match.id] === 'loading'">
+            <mat-spinner diameter="16"></mat-spinner>
+          </span>
+          <span *ngIf="oddsByMatchId[match.id] === 'error'">n/d</span>
+          <span *ngIf="oddsByMatchId[match.id] !== 'loading' && oddsByMatchId[match.id] !== 'error'">
+            {{ oddsByMatchId[match.id] }}
+          </span>
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="details">
+        <th mat-header-cell *matHeaderCellDef>Dettagli</th>
+        <td mat-cell *matCellDef="let match">
+          <a *ngIf="match.detailsUrl" [href]="match.detailsUrl" target="_blank" rel="noopener">
+            <mat-icon>open_in_new</mat-icon>
+          </a>
+          <span *ngIf="!match.detailsUrl">—</span>
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="prediction">
+        <th mat-header-cell *matHeaderCellDef>Pronostico</th>
+        <td mat-cell *matCellDef="let match">
+          <button mat-stroked-button color="accent" (click)="openPrediction(match)">
+            Pronostico
+          </button>
+        </td>
+      </ng-container>
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
+    </table>
+
+    <p *ngIf="matches.length === 0" class="empty-state">
+      Nessuna partita trovata per la prossima giornata del campionato selezionato.
+    </p>
+  </mat-card>
+</div>

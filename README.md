@@ -151,7 +151,9 @@ Codici campionato supportati (vedi `apps/backend/src/config/leagues.ts`): `SA` (
 ## Algoritmo di pronostico
 
 Implementato in `apps/backend/src/services/prediction.service.ts` (vedi commenti inline per ogni
-step):
+step). Motore **deterministico ed interamente spiegabile** ("ensemble avanzato"): ogni numero è
+tracciabile nei `debugMetrics`. **Non usa una rete neurale addestrata** — vedi il riquadro
+"Perché non è un modello AI/ML addestrato" più sotto per la motivazione.
 
 1. Calcolo forza attacco/difesa di ciascuna squadra, normalizzata sulla media gol di lega.
 2. Punteggio di forma recente (ultime 5 partite), pesato dando più importanza ai risultati più
@@ -162,27 +164,55 @@ step):
    **differenza di posizione in classifica** (`standings`, recuperata da football-data.org o
    TheSportsDB): una squadra molto più in alto in classifica riceve un piccolo bonus aggiuntivo,
    perché riflette la qualità della rosa sull'intera stagione, non solo le ultime 5 partite.
-6. **Blend con le quote di mercato reali** (se `ODDS_API_KEY` configurata, vedi sotto): le
-   probabilità del modello statistico vengono miscelate (peso 40%) con le probabilità implicite
-   nelle quote medie di più bookmaker, "de-vigghiate" (rimosso il margine) per ottenere probabilità
-   di mercato pure. Questo corregge il modello con informazioni che il modello da solo non può
-   conoscere (infortuni dell'ultima ora, formazioni, meteo, ecc.).
-7. Suggerimento **Over/Under 2.5** dai gol attesi totali.
-8. **Confidenza** (0-100) calcolata dallo scarto tra la probabilità più alta e la seconda; se le
-   quote di mercato sono disponibili e concordano con l'esito suggerito dal modello, la confidenza
-   riceve un piccolo bonus (l'accordo tra due fonti indipendenti è un segnale di maggiore
-   affidabilità), altrimenti un piccolo malus.
-9. **Quota stimata**: se disponibile, è la quota reale media di mercato (The Odds API) per l'esito
-   consigliato; altrimenti la quota "equa" calcolata dal modello (100/probabilità, ridotta dal
-   margine bookmaker ~7%).
+6. **Peso di fiducia nel mercato** (`calculateMarketTrustWeight`, dinamico tra 50% e 85%): non più
+   un peso fisso come in precedenza. Aumenta quando il mercato è più sbilanciato verso un singolo
+   esito (es. quote 1.20 vs 5.60 → la squadra a 1.20 viene considerata fortemente favorita) e
+   quando più bookmaker indipendenti concordano (fino a 15 bookmaker aggregati = fiducia massima).
+   Così le quote reali dei bookmaker influenzano il modello molto più fortemente quando il segnale
+   di mercato è forte, e meno quando il mercato è vicino all'equilibrio.
+7. **Blend con le quote di mercato reali 1X2** (se `ODDS_API_KEY` configurata): le probabilità del
+   modello statistico vengono miscelate, con il peso dinamico calcolato allo step 6, con le
+   probabilità implicite nelle quote medie di più bookmaker, "de-vigghiate" (rimosso il margine)
+   per ottenere probabilità di mercato pure.
+8. **Over/Under 2.5**: probabilità calcolata dalla stessa griglia di Poisson bivariata (non solo
+   dal confronto "gol attesi >= 2.5"), poi corretta con il mercato reale **`totals`** (Over/Under)
+   di The Odds API se disponibile, con lo stesso principio di blend dinamico dello step 6-7 (ma
+   applicato al mercato binario Over/Under).
+9. **BTTS (Both Teams To Score)**: derivato matematicamente dal modello di Poisson —
+   `P(Sì) = 1 - e^(-λcasa) - e^(-λtrasferta) + e^(-λcasa-λtrasferta)`. Nessun mercato "btts" è
+   fetchabile gratuitamente da The Odds API (la richiesta viene rifiutata con `INVALID_MARKET`),
+   quindi non c'è blend di mercato per questo esito.
+10. **Doppia chance** (1X, X2, 12): derivata sommando le probabilità 1X2 finali corrispondenti
+    (es. 1X = P(1) + P(X)). Anche questo mercato non è fetchabile gratuitamente, ma la derivazione
+    aritmetica dalle probabilità 1X2 finali è esatta.
+11. **Confidenza** (0-100, `calculateConfidence`) calcolata dallo scarto tra la probabilità più alta
+    e la seconda; se le quote di mercato sono disponibili e concordano con l'esito suggerito dal
+    modello, la confidenza riceve un bonus (8-20 punti, scalato dal peso di fiducia nel mercato
+    dello step 6), altrimenti un malus della stessa entità.
+12. **Quota stimata** (`calculateFairOdds`): se disponibile, è la quota reale media di mercato (The
+    Odds API) per l'esito consigliato; altrimenti la quota "equa" calcolata dal modello
+    (100/probabilità, ridotta dal margine bookmaker ~7%).
 
 In ambiente di sviluppo (`NODE_ENV !== production`) ogni pronostico include anche
-`debugMetrics` con i valori intermedi del calcolo (incluso `standingsFactor`, `marketBlendWeight` e
-le probabilità del modello prima del blend con il mercato), visibili nel dialog di dettaglio
-partita del frontend.
+`debugMetrics` con i valori intermedi del calcolo (incluso `standingsFactor`, `marketBlendWeight`,
+`marketSkew`, le probabilità del modello prima del blend con il mercato e la probabilità
+Over/Under del solo modello prima del blend con il mercato `totals`), visibili nel dialog di
+dettaglio partita del frontend.
 
 La **quota combinata** (pagina Top Pronostici) è il prodotto delle quote stimate dei pronostici
 selezionati, arrotondato a 3 decimali.
+
+### Perché non è un modello AI/ML addestrato
+
+Il progetto **non persiste uno storico dei risultati reali** delle partite passate (nessun
+database). Addestrare una rete neurale (es. TensorFlow.js/Brain.js) richiede un dataset etichettato
+di esempi reali con cui apprendere; senza questi dati, un "modello AI" produrrebbe pesi casuali
+mascherati da intelligenza artificiale — una scelta deliberatamente evitata. Al suo posto, questo
+motore è un **ensemble statistico deterministico e trasparente** che integra più segnali reali
+(Poisson, forma, H2H, classifica, mercati bookmaker multipli) con pesi espliciti e spiegabili. Se
+in futuro si vorrà costruire un vero modello addestrato, servirebbe prima un servizio che
+persista i risultati finali delle partite (status `FINISHED`) insieme alle feature calcolate al
+momento del pronostico, per costruire un dataset di addestramento reale.
 
 ## Provider dati esterni e fallback
 
@@ -194,11 +224,18 @@ selezionati, arrotondato a 3 decimali.
   `lookuptable.php`.
 - **The Odds API** (arricchimento opzionale, non fa parte del fallback partite/classifica):
   https://the-odds-api.com/ — piano free **gratuito**, 500 richieste/mese, richiede solo una
-  registrazione via email (nessuna carta di credito). Fornisce le quote reali 1X2 aggregate da
-  molti bookmaker (mercato `h2h`), usate come segnale aggiuntivo per il motore pronostici (vedi
-  sopra). Se `ODDS_API_KEY` non è configurata, questo arricchimento viene semplicemente saltato
-  (nessun errore): il calcolo funziona comunque con solo il modello statistico. Le squadre vengono
-  abbinate tra provider diversi per nome normalizzato (`normalizeTeamName` in
+  registrazione via email (nessuna carta di credito). Fornisce le quote reali aggregate da molti
+  bookmaker per **tre mercati calcistici** (`h2h` 1X2, `totals` Over/Under, `spreads` handicap
+  asiatico — tutti e tre confermati disponibili gratuitamente per il calcio), usate come segnale
+  aggiuntivo per il motore pronostici (vedi sopra). Se un bookmaker non offre un determinato
+  mercato per una partita, quel mercato viene semplicemente omesso senza errori. **Nota**: i
+  mercati `btts` e `double_chance` NON sono richiedibili da The Odds API (l'API risponde con
+  `INVALID_MARKET`): vengono invece calcolati matematicamente dal motore pronostici (vedi sopra).
+  **Nota su Betfair Exchange**: non esiste un'API pubblica gratuita di Betfair (richiede
+  application key + account finanziato approvato), quindi non è integrata in questo progetto. Se
+  `ODDS_API_KEY` non è configurata, l'intero arricchimento viene semplicemente saltato (nessun
+  errore): il calcolo funziona comunque con solo il modello statistico. Le squadre vengono abbinate
+  tra provider diversi per nome normalizzato (`normalizeTeamName` in
   `apps/backend/src/utils/normalize.ts`), poiché The Odds API non condivide gli stessi id squadra
   di football-data.org/TheSportsDB.
 

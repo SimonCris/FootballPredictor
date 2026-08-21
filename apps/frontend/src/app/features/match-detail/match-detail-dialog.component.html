@@ -38,7 +38,23 @@
     <p class="suggestion">
       <strong>Over/Under 2.5 gol:</strong>
       {{ prediction.overUnder.suggestion === 'OVER_2_5' ? 'Over 2.5' : 'Under 2.5' }}
+      — Over: {{ prediction.overUnder.probabilityOver }}% / Under: {{ prediction.overUnder.probabilityUnder }}%
       (gol attesi totali: {{ prediction.overUnder.expectedTotalGoals }})
+    </p>
+
+    <p class="suggestion">
+      <strong>Both Teams To Score (BTTS):</strong>
+      {{ prediction.bothTeamsToScore.suggestion === 'YES' ? 'Sì' : 'No' }}
+      — Sì: {{ prediction.bothTeamsToScore.probabilityYes }}% / No: {{ prediction.bothTeamsToScore.probabilityNo }}%
+      <span class="hint-text">(derivato dal modello statistico, nessun mercato bookmaker gratuito disponibile)</span>
+    </p>
+
+    <p class="suggestion">
+      <strong>Doppia chance:</strong>
+      1X: {{ prediction.doubleChance.oneOrDraw }}% —
+      X2: {{ prediction.doubleChance.drawOrTwo }}% —
+      12: {{ prediction.doubleChance.oneOrTwo }}%
+      <span class="hint-text">(derivata sommando le probabilità 1X2 finali)</span>
     </p>
 
     <mat-divider></mat-divider>
@@ -86,15 +102,33 @@
 
     <div *ngIf="prediction.stats.marketOdds as marketOdds">
       <mat-divider></mat-divider>
-      <h4>Quote di mercato (fonte: {{ marketOdds.source }}, {{ marketOdds.bookmakersCount }} bookmaker)</h4>
+      <h4>Quote di mercato 1X2 (fonte: {{ marketOdds.source }}, {{ marketOdds.bookmakersCount }} bookmaker)</h4>
       <p>
         1: {{ marketOdds.averageOdds.home }} ({{ (marketOdds.impliedProbabilities.home * 100).toFixed(1) }}%) —
         X: {{ marketOdds.averageOdds.draw }} ({{ (marketOdds.impliedProbabilities.draw * 100).toFixed(1) }}%) —
         2: {{ marketOdds.averageOdds.away }} ({{ (marketOdds.impliedProbabilities.away * 100).toFixed(1) }}%)
       </p>
       <p class="hint-text">
-        Il pronostico finale combina il modello statistico con queste quote reali di mercato.
+        Il pronostico finale combina il modello statistico con queste quote reali di mercato
+        (peso dinamico: più il mercato è sbilanciato e più bookmaker concordano, più pesa).
       </p>
+
+      <div *ngIf="marketOdds.totals as totals">
+        <h4>Quote di mercato Over/Under {{ totals.line }} ({{ totals.bookmakersCount }} bookmaker)</h4>
+        <p>
+          Over: {{ totals.averageOdds.over }} ({{ (totals.impliedProbabilities.over * 100).toFixed(1) }}%) —
+          Under: {{ totals.averageOdds.under }} ({{ (totals.impliedProbabilities.under * 100).toFixed(1) }}%)
+        </p>
+      </div>
+
+      <div *ngIf="marketOdds.spreads as spreads">
+        <h4>Quote di mercato handicap asiatico ({{ spreads.bookmakersCount }} bookmaker)</h4>
+        <p>
+          Linea casa: {{ spreads.line }} — Casa: {{ spreads.averageOdds.home }}
+          ({{ (spreads.impliedProbabilities.home * 100).toFixed(1) }}%) —
+          Trasferta: {{ spreads.averageOdds.away }} ({{ (spreads.impliedProbabilities.away * 100).toFixed(1) }}%)
+        </p>
+      </div>
     </div>
 
     <div *ngIf="prediction.stats.injuries">

@@ -57,6 +57,30 @@ export interface Standing {
 }
 
 /**
+ * Mercato Over/Under aggregato (es. linea 2.5 gol), con quote medie e
+ * probabilità implicite "de-vigged" (margine bookmaker rimosso).
+ */
+export interface OverUnderMarketOdds {
+  /** Linea gol usata (es. 2.5). Scelta come la più vicina a 2.5 tra quelle offerte. */
+  line: number;
+  bookmakersCount: number;
+  averageOdds: { over: number; under: number };
+  impliedProbabilities: { over: number; under: number };
+}
+
+/**
+ * Mercato handicap asiatico aggregato, riferito alla squadra di casa
+ * (es. linea -1.5 significa "casa vince con almeno 2 gol di scarto").
+ */
+export interface AsianHandicapMarketOdds {
+  /** Linea handicap applicata alla squadra di casa (es. -1.5, +0.5). Scelta come la più vicina a 0. */
+  line: number;
+  bookmakersCount: number;
+  averageOdds: { home: number; away: number };
+  impliedProbabilities: { home: number; away: number };
+}
+
+/**
  * Quote di mercato aggregate da servizi di betting gratuiti (es. The Odds API,
  * piano free), usate come segnale aggiuntivo per "correggere" il pronostico
  * statistico verso il consenso reale dei bookmaker.
@@ -64,20 +88,24 @@ export interface Standing {
 export interface MarketOdds {
   /** Nome del servizio da cui provengono le quote (es. "the-odds-api"). */
   source: string;
-  /** Numero di bookmaker aggregati per calcolare la media. */
+  /** Numero di bookmaker aggregati per calcolare la media (mercato 1X2). */
   bookmakersCount: number;
-  /** Quote decimali medie per esito. */
+  /** Quote decimali medie per esito 1X2. */
   averageOdds: {
     home: number;
     draw: number;
     away: number;
   };
-  /** Probabilità implicite dalle quote medie, "de-vigged" (normalizzate a 100%). */
+  /** Probabilità implicite dalle quote medie 1X2, "de-vigged" (normalizzate a 100%). */
   impliedProbabilities: {
     home: number;
     draw: number;
     away: number;
   };
+  /** Mercato Over/Under reale, se il bookmaker lo offre (facoltativo, nessun errore se assente). */
+  totals?: OverUnderMarketOdds;
+  /** Mercato handicap asiatico reale, se il bookmaker lo offre (facoltativo, nessun errore se assente). */
+  spreads?: AsianHandicapMarketOdds;
 }
 
 /** Partita normalizzata, indipendente dal provider di origine. */
@@ -118,10 +146,14 @@ export interface PredictionDebugMetrics {
   expectedGoalsAway: number;
   /** Aggiustamento derivato dalla differenza di posizione in classifica. */
   standingsFactor: number;
-  /** Peso [0-1] dato alle quote di mercato nel blend con il modello statistico. */
+  /** Peso [0-1] dato alle quote di mercato nel blend con il modello statistico (dinamico, vedi calculateMarketTrustWeight). */
   marketBlendWeight: number;
+  /** Quanto e' "sbilanciato" il mercato verso un singolo esito, in [0-1] (0 = equilibrato, 1 = fortemente sbilanciato). */
+  marketSkew: number;
   /** Probabilità del modello statistico prima del blend con il mercato. */
   modelProbabilitiesBeforeBlend: { home: number; draw: number; away: number };
+  /** Probabilità Over/Under 2.5 secondo il solo modello statistico (prima del blend con il mercato totals). */
+  overUnderModelProbability: { over: number; under: number };
 }
 
 /** Pronostico calcolato per una partita. */
@@ -138,6 +170,28 @@ export interface Prediction {
   overUnder: {
     suggestion: OverUnderSuggestion;
     expectedTotalGoals: number;
+    /** Probabilità percentuale di Over/Under sulla linea usata (default 2.5), dopo il blend con il mercato "totals" reale se disponibile. */
+    probabilityOver: number;
+    probabilityUnder: number;
+  };
+  /**
+   * Doppia chance (1X, X2, 12), derivata matematicamente sommando le
+   * probabilità 1X2 finali corrispondenti (nessun mercato dedicato
+   * disponibile gratuitamente, ma la derivazione è aritmetica esatta).
+   */
+  doubleChance: {
+    oneOrDraw: number; // 1X
+    drawOrTwo: number; // X2
+    oneOrTwo: number; // 12
+  };
+  /**
+   * Both Teams To Score, derivato dal modello di Poisson bivariato
+   * (nessun mercato "btts" fetchabile gratuitamente da The Odds API).
+   */
+  bothTeamsToScore: {
+    suggestion: 'YES' | 'NO';
+    probabilityYes: number;
+    probabilityNo: number;
   };
   /** Punteggio di affidabilità 0-100: piu' alto = piu' affidabile. */
   confidence: number;

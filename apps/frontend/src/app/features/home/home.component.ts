@@ -5,7 +5,7 @@
  * e il pronostico calcolato dal backend.
  */
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -17,11 +17,15 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTableModule } from '@angular/material/table';
 import { MatToolbarModule } from '@angular/material/toolbar';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { ApiService } from '../../core/services/api.service';
+import { SelectionService } from '../../core/services/selection.service';
 import { League, Match } from '../../core/models/league.model';
 import { Prediction } from '../../core/models/prediction.model';
 import { MatchDetailDialogComponent } from '../match-detail/match-detail-dialog.component';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-home',
@@ -40,11 +44,13 @@ import { MatchDetailDialogComponent } from '../match-detail/match-detail-dialog.
     MatProgressSpinnerModule,
     MatSnackBarModule,
     MatDialogModule,
+    MatTooltipModule,
+    MatCheckboxModule,
   ],
   templateUrl: './home.component.html',
   styleUrl: './home.component.scss',
 })
-export class HomeComponent implements OnInit {
+export class HomeComponent implements OnInit, OnDestroy {
   leagues: League[] = [];
   selectedLeagueCode: string | null = null;
   matches: Match[] = [];
@@ -53,27 +59,39 @@ export class HomeComponent implements OnInit {
   hasSearched = false;
 
   /**
-   * Quota stimata calcolata in modo asincrono per ogni partita, popolata
-   * lazy dopo la ricerca (il backend calcola/mette in cache il pronostico
-   * completo, qui usiamo solo la quota per la colonna della tabella).
+   * Pronostico completo calcolato in modo asincrono per ogni partita,
+   * popolato lazy dopo la ricerca (il backend calcola/mette in cache il
+   * pronostico). Oltre alla quota stimata, usiamo la confidenza per
+   * evidenziare le 3 partite più probabili della giornata.
    */
-  oddsByMatchId: Record<string, number | 'loading' | 'error'> = {};
+  predictionsByMatchId: Record<string, Prediction | 'loading' | 'error'> = {};
+
+  /** Id delle 3 partite con confidenza più alta nella tabella corrente. */
+  topPickIds = new Set<string>();
+
+  /** Id delle partite selezionate manualmente dall'utente (sincronizzato con SelectionService). */
+  selectedMatchIds = new Set<string>();
+
+  /** Numero totale di partite selezionate (mostrato come badge in navbar). */
+  selectedCount = 0;
+
+  private selectionSubscription?: Subscription;
 
   readonly displayedColumns = [
+    'select',
     'date',
     'time',
     'home',
     'away',
-    'venue',
     'odds',
-    'details',
     'prediction',
   ];
 
   constructor(
     private readonly api: ApiService,
     private readonly dialog: MatDialog,
-    private readonly snackBar: MatSnackBar
+    private readonly snackBar: MatSnackBar,
+    private readonly selection: SelectionService
   ) {}
 
   ngOnInit(): void {
@@ -90,9 +108,21 @@ export class HomeComponent implements OnInit {
         });
       },
     });
+    this.selectionSubscription = this.selection.entries$.subscribe((entries) => {
+      this.selectedCount = entries.length;
+      this.refreshSelectedIds();
+    });
   }
 
-  search(): void {
+  ngOnDestroy(): void {
+    this.selectionSubscription?.unsubscribe();
+  }
+
+  /**
+   * @param forceRefresh se `true` ignora la cache lato FE e ripete la
+   * chiamata al backend (usato dal pulsante "Aggiorna").
+   */
+  search(forceRefresh = false): void {
     if (!this.selectedLeagueCode) {
       this.snackBar.open('Selezionare prima un campionato.', 'Chiudi', { duration: 3000 });
       return;
@@ -100,17 +130,19 @@ export class HomeComponent implements OnInit {
 
     this.loadingMatches = true;
     this.hasSearched = true;
-    this.oddsByMatchId = {};
-    this.api.getMatchday(this.selectedLeagueCode).subscribe({
+    this.predictionsByMatchId = {};
+    this.topPickIds = new Set<string>();
+    this.api.getMatchday(this.selectedLeagueCode, forceRefresh).subscribe({
       next: (response) => {
         this.matches = response.matches;
         this.loadingMatches = false;
+        this.refreshSelectedIds();
         if (this.matches.length === 0) {
           this.snackBar.open('Nessuna partita trovata per la prossima giornata.', 'Chiudi', {
             duration: 4000,
           });
         } else {
-          this.loadEstimatedOdds();
+          this.loadPredictions(forceRefresh);
           if (response.warning) {
             this.snackBar.open(response.warning, 'Chiudi', { duration: 10000 });
           }
@@ -127,22 +159,74 @@ export class HomeComponent implements OnInit {
   }
 
   /**
-   * Recupera la quota stimata per ciascuna partita in modo asincrono e
-   * indipendente, così la tabella si popola progressivamente senza
-   * bloccarsi in attesa di tutte le chiamate.
+   * Recupera il pronostico completo per ciascuna partita in modo asincrono
+   * e indipendente, così la tabella si popola progressivamente senza
+   * bloccarsi in attesa di tutte le chiamate. Le risposte vengono servite
+   * dalla cache FE se già disponibili (es. dialog già aperto in precedenza).
+   * Dopo ogni arrivo si ricalcolano le 3 partite più probabili della
+   * giornata (top pick) in base alla confidenza del pronostico.
    */
-  private loadEstimatedOdds(): void {
+  private loadPredictions(forceRefresh = false): void {
     for (const match of this.matches) {
-      this.oddsByMatchId[match.id] = 'loading';
-      this.api.getMatchPrediction(match.id).subscribe({
+      this.predictionsByMatchId[match.id] = 'loading';
+      this.api.getMatchPrediction(match.id, forceRefresh).subscribe({
         next: ({ prediction }: { prediction: Prediction }) => {
-          this.oddsByMatchId[match.id] = prediction.estimatedOdds;
+          this.predictionsByMatchId[match.id] = prediction;
+          this.recomputeTopPicks();
         },
         error: () => {
-          this.oddsByMatchId[match.id] = 'error';
+          this.predictionsByMatchId[match.id] = 'error';
         },
       });
     }
+  }
+
+  /** Ricalcola le id delle 3 partite con confidenza più alta tra quelle già caricate. */
+  private recomputeTopPicks(): void {
+    const loaded = this.matches
+      .map((match) => ({ match, prediction: this.predictionsByMatchId[match.id] }))
+      .filter(
+        (entry): entry is { match: Match; prediction: Prediction } =>
+          typeof entry.prediction === 'object'
+      )
+      .sort((a, b) => b.prediction.confidence - a.prediction.confidence)
+      .slice(0, 3)
+      .map((entry) => entry.match.id);
+    this.topPickIds = new Set(loaded);
+  }
+
+  /** `true` se la partita è tra le 3 con pronostico più probabile della tabella corrente. */
+  isTopPick(match: Match): boolean {
+    return this.topPickIds.has(match.id);
+  }
+
+  /** Sincronizza `selectedMatchIds` con lo stato salvato in sessione. */
+  private refreshSelectedIds(): void {
+    const ids = new Set(this.selection.getAll().map((entry) => entry.match.id));
+    this.selectedMatchIds = new Set(
+      this.matches.filter((match) => ids.has(match.id)).map((match) => match.id)
+    );
+  }
+
+  isSelected(match: Match): boolean {
+    return this.selectedMatchIds.has(match.id);
+  }
+
+  /**
+   * Seleziona/deseleziona una partita per la sezione "Pronostici Selezionati".
+   * Richiede che il pronostico sia già stato caricato (avviene automaticamente
+   * dopo la ricerca), così non serve alcuna chiamata aggiuntiva al backend.
+   */
+  toggleSelection(match: Match): void {
+    const prediction = this.predictionsByMatchId[match.id];
+    if (typeof prediction !== 'object') {
+      this.snackBar.open('Attendere il calcolo del pronostico prima di selezionare.', 'Chiudi', {
+        duration: 3000,
+      });
+      return;
+    }
+    // La subscription su selection.entries$ aggiorna selectedMatchIds di conseguenza.
+    this.selection.toggle(match, prediction);
   }
 
   openPrediction(match: Match): void {

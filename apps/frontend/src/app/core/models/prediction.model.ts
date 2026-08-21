@@ -28,7 +28,9 @@ export interface PredictionDebugMetrics {
   expectedGoalsAway: number;
   standingsFactor: number;
   marketBlendWeight: number;
+  marketSkew: number;
   modelProbabilitiesBeforeBlend: { home: number; draw: number; away: number };
+  overUnderModelProbability: { over: number; under: number };
 }
 
 export interface Standing {
@@ -44,11 +46,27 @@ export interface Standing {
   points: number;
 }
 
+export interface OverUnderMarketOdds {
+  line: number;
+  bookmakersCount: number;
+  averageOdds: { over: number; under: number };
+  impliedProbabilities: { over: number; under: number };
+}
+
+export interface AsianHandicapMarketOdds {
+  line: number;
+  bookmakersCount: number;
+  averageOdds: { home: number; away: number };
+  impliedProbabilities: { home: number; away: number };
+}
+
 export interface MarketOdds {
   source: string;
   bookmakersCount: number;
   averageOdds: { home: number; draw: number; away: number };
   impliedProbabilities: { home: number; draw: number; away: number };
+  totals?: OverUnderMarketOdds;
+  spreads?: AsianHandicapMarketOdds;
 }
 
 export interface Prediction {
@@ -62,6 +80,18 @@ export interface Prediction {
   overUnder: {
     suggestion: OverUnderSuggestion;
     expectedTotalGoals: number;
+    probabilityOver: number;
+    probabilityUnder: number;
+  };
+  doubleChance: {
+    oneOrDraw: number;
+    drawOrTwo: number;
+    oneOrTwo: number;
+  };
+  bothTeamsToScore: {
+    suggestion: 'YES' | 'NO';
+    probabilityYes: number;
+    probabilityNo: number;
   };
   confidence: number;
   estimatedOdds: number;

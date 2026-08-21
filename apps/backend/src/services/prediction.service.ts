@@ -1,15 +1,32 @@
 /**
- * Motore di calcolo dei pronostici statistici.
+ * Motore di calcolo dei pronostici statistici — "ensemble avanzato".
  *
- * Approccio: modello di Poisson bivariato semplificato per stimare i gol
- * attesi di ciascuna squadra, combinato con aggiustamenti basati su forma
- * recente, scontri diretti e posizione in classifica, e infine "corretto"
- * miscelando le probabilità del modello con quelle implicite nelle quote
- * reali dei bookmaker (se disponibili tramite The Odds API, piano free).
+ * Approccio: modello di Poisson bivariato per stimare i gol attesi di
+ * ciascuna squadra, combinato con aggiustamenti basati su forma recente,
+ * scontri diretti e posizione in classifica, e infine "corretto" miscelando
+ * le probabilità del modello con quelle implicite nelle quote reali dei
+ * bookmaker (The Odds API, piano free). Il peso dato al mercato non è più
+ * fisso: aumenta dinamicamente quando i bookmaker sono nettamente concordi
+ * (es. 1.20 vs 5.60 → il mercato viene considerato molto più affidabile del
+ * modello statistico da solo). Vedi `calculateMarketTrustWeight`.
+ *
+ * NOTA SULLA "AI": questo motore NON usa una rete neurale addestrata. Una
+ * rete neurale richiederebbe uno storico di risultati reali con cui
+ * addestrarsi, che questo progetto non persiste (nessun database dei
+ * risultati passati). Costruire un modello "AI" senza dati di addestramento
+ * reali produrrebbe pesi casuali travestiti da intelligenza artificiale:
+ * scelta deliberata di NON farlo. Al suo posto, questo è un ensemble
+ * deterministico e interamente spiegabile (ogni numero è tracciabile nei
+ * `debugMetrics`), che integra più mercati bookmaker reali (1X2, Over/Under,
+ * handicap asiatico) e deriva matematicamente i mercati non disponibili
+ * gratuitamente (BTTS, doppia chance).
+ *
  * Il modulo espone una funzione pura `computePrediction` (facilmente
  * testabile in isolamento, vedi tests/prediction.service.spec.ts) e una
  * funzione `getMatchPrediction` che recupera i dati necessari dai provider
- * e li passa al calcolo.
+ * e li passa al calcolo. Le funzioni `calculateMarketTrustWeight`,
+ * `calculateConfidence` e `calculateFairOdds` sono estratte come helper
+ * indipendenti e testabili singolarmente.
  *
  * Step dell'algoritmo (vedi commenti inline):
  *  1. Forza attacco/difesa di ciascuna squadra, normalizzata sulla media gol di lega.
@@ -18,10 +35,21 @@
  *  4. Probabilità 1X2 tramite distribuzione di Poisson bivariata.
  *  5. Aggiustamento delle probabilità con forma recente, scontri diretti e
  *     differenza di posizione in classifica.
- *  6. Blend con le probabilità implicite nelle quote di mercato reali (se disponibili).
- *  7. Suggerimento Over/Under 2.5 dai gol attesi totali.
- *  8. Punteggio di confidenza dallo scarto tra le probabilità.
- *  9. Quota stimata: media tra la quota "equa" del modello e la quota di mercato reale (se disponibile).
+ *  6. Calcolo del "peso di fiducia" nel mercato (calculateMarketTrustWeight):
+ *     più bookmaker aggregati e più il mercato è sbilanciato verso un esito,
+ *     più il blend successivo pesa le quote reali rispetto al modello.
+ *  7. Blend con le probabilità implicite nelle quote di mercato reali (1X2).
+ *  8. Over/Under: probabilità dal modello di Poisson, "corretta" con il
+ *     mercato "totals" reale se disponibile (stesso principio del blend 1X2).
+ *  9. BTTS (Both Teams To Score): derivato matematicamente dal modello di
+ *     Poisson (nessun mercato "btts" fetchabile gratuitamente).
+ *  10. Doppia chance (1X, X2, 12): derivata sommando le probabilità 1X2 finali.
+ *  11. Punteggio di confidenza (calculateConfidence): scarto tra le
+ *      probabilità + bonus/malus in base all'accordo con il mercato, scalato
+ *      dal peso di fiducia nel mercato stesso.
+ *  12. Quota stimata (calculateFairOdds): la quota reale di mercato per
+ *      l'esito consigliato se disponibile, altrimenti la quota "equa" del
+ *      modello statistico corretta dal margine bookmaker tipico.
  */
 import {
   Match,
@@ -50,10 +78,26 @@ const MAX_GOALS = 6;
 /** Pesi per le ultime 5 partite, dal più recente (indice 0) al meno recente. */
 const FORM_WEIGHTS = [5, 4, 3, 2, 1];
 const RESULT_POINTS: Record<'W' | 'D' | 'L', number> = { W: 3, D: 1, L: 0 };
-/** Peso massimo dato alle quote di mercato reali nel blend con il modello statistico. */
-const MARKET_BLEND_WEIGHT = 0.4;
+/**
+ * Peso BASE dato alle quote di mercato reali nel blend con il modello
+ * statistico (usato quando il mercato è vicino all'equilibrio, es. 33/33/33).
+ * Alzato rispetto alla versione precedente (era 0.4 fisso) perché i
+ * bookmaker aggregano informazioni (infortuni, formazioni, meteo) che il
+ * modello statistico non può conoscere: il mercato merita più fiducia di base.
+ */
+const MARKET_BLEND_WEIGHT_BASE = 0.5;
+/**
+ * Peso MASSIMO dato al mercato quando è fortemente sbilanciato verso un
+ * singolo esito (es. 1.20 vs 5.60) e aggregato da molti bookmaker: in
+ * questo scenario il mercato deve dominare il pronostico finale.
+ */
+const MARKET_BLEND_WEIGHT_MAX = 0.85;
+/** Numero di bookmaker aggregati oltre il quale consideriamo il consenso di mercato "pienamente affidabile". */
+const BOOKMAKER_COUNT_FOR_FULL_TRUST = 15;
 /** Numero tipico di squadre in un campionato europeo, usato per normalizzare il fattore classifica. */
 const TYPICAL_LEAGUE_SIZE = 20;
+/** Linea Over/Under standard usata dal motore (il mercato "totals" più vicino a questo valore viene usato per il blend). */
+const OU_LINE = 2.5;
 
 function factorial(n: number): number {
   let result = 1;
@@ -113,6 +157,148 @@ function computePoissonOutcomeProbabilities(
     draw: drawProb / total,
     away: awayWinProb / total,
   };
+}
+
+/**
+ * Calcola la probabilità Over/Under sulla linea data (default 2.5) a partire
+ * dalla stessa griglia di Poisson bivariata usata per l'1X2: si somma la
+ * probabilità congiunta di tutte le combinazioni di gol il cui totale supera
+ * la linea. Più preciso della semplice euristica "gol attesi >= linea",
+ * perché tiene conto della forma della distribuzione (non solo della media).
+ */
+function computeOverUnderProbabilities(
+  expectedGoalsHome: number,
+  expectedGoalsAway: number,
+  line: number = OU_LINE
+): { over: number; under: number } {
+  let overProb = 0;
+  let totalProb = 0;
+
+  for (let homeGoals = 0; homeGoals <= MAX_GOALS; homeGoals++) {
+    for (let awayGoals = 0; awayGoals <= MAX_GOALS; awayGoals++) {
+      const jointProb =
+        poissonProbability(expectedGoalsHome, homeGoals) * poissonProbability(expectedGoalsAway, awayGoals);
+      totalProb += jointProb;
+      if (homeGoals + awayGoals > line) overProb += jointProb;
+    }
+  }
+
+  // Normalizza per compensare la probabilità residua troncata oltre MAX_GOALS.
+  return { over: overProb / totalProb, under: 1 - overProb / totalProb };
+}
+
+/**
+ * Calcola la probabilità di "Both Teams To Score" (BTTS) a partire dai gol
+ * attesi, assumendo indipendenza tra i gol delle due squadre (stessa
+ * semplificazione del modello 1X2). Nessun mercato "btts" è fetchabile
+ * gratuitamente da The Odds API (rifiutato come mercato non valido), quindi
+ * questa probabilità è interamente derivata dal modello statistico:
+ *   P(BTTS=No)  = P(casa=0) + P(trasferta=0) - P(casa=0)*P(trasferta=0)
+ *   P(BTTS=Sì)  = 1 - P(BTTS=No)
+ * (probabilità dell'unione "nessuna delle due squadre segna" complementata).
+ */
+function computeBttsProbability(expectedGoalsHome: number, expectedGoalsAway: number): number {
+  const probHomeNoGoals = Math.exp(-expectedGoalsHome);
+  const probAwayNoGoals = Math.exp(-expectedGoalsAway);
+  const probBttsNo = probHomeNoGoals + probAwayNoGoals - probHomeNoGoals * probAwayNoGoals;
+  return 1 - probBttsNo;
+}
+
+/**
+ * Calcola quanto il mercato bookmaker debba "pesare" nel blend con il
+ * modello statistico, in [MARKET_BLEND_WEIGHT_BASE, MARKET_BLEND_WEIGHT_MAX].
+ * Due fattori aumentano la fiducia nel mercato:
+ *  - "skew": quanto il mercato è sbilanciato verso un singolo esito. Un
+ *    mercato vicino all'equilibrio (33/33/33) è meno informativo di uno
+ *    fortemente sbilanciato (es. 1.20 vs 5.60, skew vicino a 1): un
+ *    grande favorito quotato è un segnale forte e va rispettato.
+ *  - numero di bookmaker aggregati: più fonti indipendenti concordano, più
+ *    il consenso è affidabile (meno rumore di un singolo bookmaker anomalo).
+ * Questo implementa esplicitamente il requisito "le quote dei bookmaker
+ * devono influenzare il modello in modo più forte, specialmente quando il
+ * mercato è nettamente sbilanciato".
+ */
+export function calculateMarketTrustWeight(marketOdds?: MarketOdds): number {
+  if (!marketOdds) return 0;
+
+  const { home, draw, away } = marketOdds.impliedProbabilities;
+  const maxImpliedProbability = Math.max(home, draw, away);
+  // In un mercato 1X2 perfettamente equilibrato ogni esito avrebbe probabilità 1/3.
+  // Normalizziamo lo scarto dal punto di equilibrio in [0, 1].
+  const skew = Math.max(0, (maxImpliedProbability - 1 / 3) / (1 - 1 / 3));
+
+  const bookmakerConfidence = Math.min(1, marketOdds.bookmakersCount / BOOKMAKER_COUNT_FOR_FULL_TRUST);
+
+  const extraTrust = (MARKET_BLEND_WEIGHT_MAX - MARKET_BLEND_WEIGHT_BASE) * skew * bookmakerConfidence;
+  return Math.min(MARKET_BLEND_WEIGHT_MAX, MARKET_BLEND_WEIGHT_BASE + extraTrust);
+}
+
+/**
+ * Variante di `calculateMarketTrustWeight` per mercati binari (Over/Under),
+ * dove il punto di equilibrio è 0.5 invece di 1/3 (come nel mercato
+ * ternario 1X2).
+ */
+function calculateBinaryMarketTrustWeight(bookmakersCount: number, impliedProbabilityA: number): number {
+  const skew = Math.abs(impliedProbabilityA - 0.5) / 0.5;
+  const bookmakerConfidence = Math.min(1, bookmakersCount / BOOKMAKER_COUNT_FOR_FULL_TRUST);
+  const extraTrust = (MARKET_BLEND_WEIGHT_MAX - MARKET_BLEND_WEIGHT_BASE) * skew * bookmakerConfidence;
+  return Math.min(MARKET_BLEND_WEIGHT_MAX, MARKET_BLEND_WEIGHT_BASE + extraTrust);
+}
+
+/**
+ * Calcola il punteggio di confidenza 0-100: parte dallo scarto tra la
+ * probabilità dell'esito consigliato e la seconda più probabile (uno scarto
+ * di 50 punti percentuali corrisponde a confidenza massima), poi applica un
+ * bonus/malus se il mercato è disponibile e (dis)concorda con il modello.
+ * Il bonus/malus scala con `marketTrustWeight`: un mercato molto sbilanciato
+ * e aggregato da molti bookmaker che concorda (o meno) con il modello pesa
+ * molto di più di un mercato vicino all'equilibrio.
+ */
+export function calculateConfidence(
+  topProbability: number,
+  secondProbability: number,
+  marketOdds: MarketOdds | undefined,
+  suggestedOutcome: MatchOutcome,
+  marketTrustWeight: number
+): number {
+  let confidence = Math.min(100, ((topProbability - secondProbability) / 50) * 100);
+  if (marketOdds) {
+    const marketOutcomeEntries: Array<[MatchOutcome, number]> = [
+      ['1', marketOdds.impliedProbabilities.home],
+      ['X', marketOdds.impliedProbabilities.draw],
+      ['2', marketOdds.impliedProbabilities.away],
+    ];
+    marketOutcomeEntries.sort((a, b) => b[1] - a[1]);
+    const marketAgreesWithModel = marketOutcomeEntries[0][0] === suggestedOutcome;
+    // Il bonus/malus varia tra 8 e 20 punti in base a quanto il mercato è
+    // affidabile (marketTrustWeight in [MARKET_BLEND_WEIGHT_BASE, MARKET_BLEND_WEIGHT_MAX]).
+    const agreementMagnitude = 8 + 12 * marketTrustWeight;
+    confidence += marketAgreesWithModel ? agreementMagnitude : -agreementMagnitude;
+    confidence = Math.max(0, Math.min(100, confidence));
+  }
+  return roundTo(confidence, 1);
+}
+
+/**
+ * Calcola la quota stimata (decimal odds) per l'esito consigliato: se
+ * disponibile la quota di mercato reale, viene usata direttamente (i
+ * bookmaker riflettono il prezzo realmente offerto, più affidabile di una
+ * stima teorica); altrimenti si usa la quota "equa" calcolata dal modello
+ * statistico, corretta dal margine bookmaker tipico.
+ */
+export function calculateFairOdds(
+  topProbability: number,
+  marketOdds: MarketOdds | undefined,
+  suggestedOutcome: MatchOutcome
+): number {
+  const modelOdds = Math.max(1.01, roundTo(100 / topProbability / BOOKMAKER_MARGIN, 2));
+  if (!marketOdds) return modelOdds;
+  const marketOddsForOutcome = {
+    '1': marketOdds.averageOdds.home,
+    X: marketOdds.averageOdds.draw,
+    '2': marketOdds.averageOdds.away,
+  }[suggestedOutcome];
+  return roundTo(marketOddsForOutcome, 2);
 }
 
 export interface HeadToHeadStats {
@@ -210,13 +396,30 @@ export function computePrediction({
     away: roundTo(away * 100, 1),
   };
 
-  // Step 6: blend con le probabilità di mercato reali (se disponibili da The
-  // Odds API). Diamo un peso fisso al mercato (MARKET_BLEND_WEIGHT) perché
-  // riflette il consenso aggregato di molti bookmaker e tipicamente include
-  // informazioni (infortuni dell'ultima ora, formazioni, meteo) che il
-  // nostro modello statistico non può conoscere. Se il mercato non è
-  // disponibile, il peso è 0 e il risultato resta invariato.
-  const marketBlendWeight = marketOdds ? MARKET_BLEND_WEIGHT : 0;
+  // Step 6: calcola quanto fidarsi del mercato 1X2 in base a quanto è
+  // sbilanciato verso un singolo esito e a quanti bookmaker lo confermano
+  // (vedi calculateMarketTrustWeight). Con quote es. 1.20 vs 5.60 il peso
+  // sale vicino al massimo: il mercato domina il blend successivo.
+  const marketBlendWeight = calculateMarketTrustWeight(marketOdds);
+  // Skew del MERCATO (non del modello): quanto le quote reali dei bookmaker
+  // sono sbilanciate verso un singolo esito, usato solo a fini di debug per
+  // spiegare perché marketBlendWeight ha un certo valore.
+  const marketSkew = marketOdds
+    ? Math.max(
+        0,
+        (Math.max(
+          marketOdds.impliedProbabilities.home,
+          marketOdds.impliedProbabilities.draw,
+          marketOdds.impliedProbabilities.away
+        ) -
+          1 / 3) /
+          (1 - 1 / 3)
+      )
+    : 0;
+
+  // Step 7: blend con le probabilità di mercato reali (se disponibili da The
+  // Odds API), con il peso dinamico calcolato allo step 6. Se il mercato non
+  // è disponibile, il peso è 0 e il risultato resta invariato.
   if (marketOdds) {
     home = home * (1 - marketBlendWeight) + marketOdds.impliedProbabilities.home * marketBlendWeight;
     draw = draw * (1 - marketBlendWeight) + marketOdds.impliedProbabilities.draw * marketBlendWeight;
@@ -233,7 +436,7 @@ export function computePrediction({
     away: roundTo(away * 100, 1),
   };
 
-  // Step 7: esito consigliato = probabilità massima tra 1, X, 2.
+  // Esito consigliato = probabilità massima tra 1, X, 2.
   const outcomeEntries: Array<[MatchOutcome, number]> = [
     ['1', probabilities.home],
     ['X', probabilities.draw],
@@ -244,52 +447,73 @@ export function computePrediction({
   const topProbability = outcomeEntries[0][1];
   const secondProbability = outcomeEntries[1][1];
 
-  // Step 8: suggerimento Over/Under 2.5 dai gol attesi totali.
+  // Step 8: Over/Under sulla linea OU_LINE (default 2.5). Probabilità dal
+  // modello di Poisson, poi "corretta" con il mercato "totals" reale se
+  // disponibile (stesso principio di blend dinamico dello step 6-7, ma
+  // applicato al mercato binario Over/Under invece che al ternario 1X2).
   const expectedTotalGoals = roundTo(expectedGoalsHome + expectedGoalsAway, 2);
+  const modelOverUnderProbability = computeOverUnderProbabilities(expectedGoalsHome, expectedGoalsAway, OU_LINE);
+  let overProbability = modelOverUnderProbability.over;
+  if (marketOdds?.totals && Math.abs(marketOdds.totals.line - OU_LINE) <= 0.5) {
+    const totalsBlendWeight = calculateBinaryMarketTrustWeight(
+      marketOdds.totals.bookmakersCount,
+      marketOdds.totals.impliedProbabilities.over
+    );
+    overProbability =
+      overProbability * (1 - totalsBlendWeight) +
+      marketOdds.totals.impliedProbabilities.over * totalsBlendWeight;
+  }
+  const underProbability = 1 - overProbability;
   const overUnder = {
-    suggestion: (expectedTotalGoals >= 2.5 ? 'OVER_2_5' : 'UNDER_2_5') as Prediction['overUnder']['suggestion'],
+    suggestion: (overProbability >= 0.5 ? 'OVER_2_5' : 'UNDER_2_5') as Prediction['overUnder']['suggestion'],
     expectedTotalGoals,
+    probabilityOver: roundTo(overProbability * 100, 1),
+    probabilityUnder: roundTo(underProbability * 100, 1),
   };
 
-  // Step 9: confidenza = scarto tra la probabilità più alta e la seconda più alta,
-  // scalato in 0-100 (uno scarto di 50 punti percentuali corrisponde a confidenza massima).
-  // Se disponibile il mercato ed è concorde con il modello (stesso esito
-  // suggerito), la confidenza riceve un piccolo bonus, perché l'accordo tra
-  // due fonti indipendenti (modello statistico + consenso bookmaker) è un
-  // segnale di maggiore affidabilità.
-  let confidence = Math.min(100, ((topProbability - secondProbability) / 50) * 100);
-  if (marketOdds) {
-    const marketOutcomeEntries: Array<[MatchOutcome, number]> = [
-      ['1', marketOdds.impliedProbabilities.home],
-      ['X', marketOdds.impliedProbabilities.draw],
-      ['2', marketOdds.impliedProbabilities.away],
-    ];
-    marketOutcomeEntries.sort((a, b) => b[1] - a[1]);
-    const marketAgreesWithModel = marketOutcomeEntries[0][0] === suggestedOutcome;
-    confidence = Math.min(100, confidence + (marketAgreesWithModel ? 8 : -8));
-    confidence = Math.max(0, confidence);
-  }
-  confidence = roundTo(confidence, 1);
+  // Step 9: BTTS (Both Teams To Score), derivato matematicamente dal modello
+  // di Poisson (nessun mercato "btts" fetchabile gratuitamente, vedi
+  // odds.provider.ts). Nessun blend di mercato possibile per questo esito.
+  const bttsYesProbability = computeBttsProbability(expectedGoalsHome, expectedGoalsAway);
+  const bothTeamsToScore = {
+    suggestion: (bttsYesProbability >= 0.5 ? 'YES' : 'NO') as Prediction['bothTeamsToScore']['suggestion'],
+    probabilityYes: roundTo(bttsYesProbability * 100, 1),
+    probabilityNo: roundTo((1 - bttsYesProbability) * 100, 1),
+  };
 
-  // Step 10: quota stimata. Se disponibile la quota di mercato reale per
-  // l'esito consigliato, viene usata direttamente quella (i bookmaker
-  // riflettono il prezzo realmente offerto sul mercato, più affidabile di
-  // una stima teorica); altrimenti si usa la quota "equa" calcolata dal
-  // modello statistico (corretta dal margine bookmaker tipico).
-  const modelOdds = Math.max(1.01, roundTo(100 / topProbability / BOOKMAKER_MARGIN, 2));
-  let estimatedOdds = modelOdds;
-  if (marketOdds) {
-    const marketOddsForOutcome = { '1': marketOdds.averageOdds.home, X: marketOdds.averageOdds.draw, '2': marketOdds.averageOdds.away }[
-      suggestedOutcome
-    ];
-    estimatedOdds = roundTo(marketOddsForOutcome, 2);
-  }
+  // Step 10: doppia chance (1X, X2, 12), derivata sommando le probabilità
+  // 1X2 finali corrispondenti (derivazione aritmetica esatta, nessun
+  // mercato dedicato disponibile gratuitamente).
+  const doubleChance = {
+    oneOrDraw: roundTo(probabilities.home + probabilities.draw, 1),
+    drawOrTwo: roundTo(probabilities.draw + probabilities.away, 1),
+    oneOrTwo: roundTo(probabilities.home + probabilities.away, 1),
+  };
+
+  // Step 11: confidenza. Vedi calculateConfidence: scarto tra probabilità +
+  // bonus/malus di accordo col mercato, scalato dal peso di fiducia nel
+  // mercato stesso (marketBlendWeight), così che un mercato molto
+  // sbilanciato e concorde pesi molto di più di uno vicino all'equilibrio.
+  const confidence = calculateConfidence(
+    topProbability,
+    secondProbability,
+    marketOdds,
+    suggestedOutcome,
+    marketBlendWeight
+  );
+
+  // Step 12: quota stimata. Vedi calculateFairOdds: la quota reale di
+  // mercato per l'esito consigliato se disponibile, altrimenti la quota
+  // "equa" del modello statistico corretta dal margine bookmaker tipico.
+  const estimatedOdds = calculateFairOdds(topProbability, marketOdds, suggestedOutcome);
 
   const prediction: Prediction = {
     matchId: match.id,
     probabilities,
     suggestedOutcome,
     overUnder,
+    doubleChance,
+    bothTeamsToScore,
     confidence,
     estimatedOdds,
     stats: {
@@ -316,13 +540,21 @@ export function computePrediction({
       expectedGoalsHome: roundTo(expectedGoalsHome, 3),
       expectedGoalsAway: roundTo(expectedGoalsAway, 3),
       standingsFactor: roundTo(standingsFactor, 3),
-      marketBlendWeight,
+      marketBlendWeight: roundTo(marketBlendWeight, 3),
+      marketSkew: roundTo(marketSkew, 3),
       modelProbabilitiesBeforeBlend,
+      overUnderModelProbability: {
+        over: roundTo(modelOverUnderProbability.over * 100, 1),
+        under: roundTo(modelOverUnderProbability.under * 100, 1),
+      },
     };
   }
 
   return prediction;
 }
+
+/** Alias esplicito richiesto per chiarezza del nome della funzione principale del motore. */
+export const calculatePrediction = computePrediction;
 
 /**
  * Recupera dai provider (con cache) tutte le statistiche necessarie per una

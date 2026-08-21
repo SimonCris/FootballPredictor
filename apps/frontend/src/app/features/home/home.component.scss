@@ -29,3 +29,24 @@
   text-align: center;
   color: rgba(0, 0, 0, 0.6);
 }
+
+/* Evidenzia le 3 partite con il pronostico più probabile della giornata. */
+.top-pick-row {
+  background-color: rgba(255, 193, 7, 0.18);
+  border-left: 4px solid #ffb300;
+}
+
+.selected-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 10px;
+  background-color: #fff;
+  color: #1976d2;
+  font-size: 12px;
+  font-weight: 600;
+}

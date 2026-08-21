@@ -10,6 +10,20 @@ export interface RetryOptions {
   baseDelayMs?: number;
 }
 
+/** Estrae lo status HTTP dall'errore, se presente (es. errori Axios). */
+function extractStatus(err: unknown): number | undefined {
+  return (err as { response?: { status?: number } })?.response?.status;
+}
+
+/**
+ * Errori 401 (chiave API non valida) e 403 (quota esaurita/account disabilitato)
+ * sono permanenti per la richiesta corrente: ritentare non cambia l'esito e
+ * spreca tempo/chiamate, quindi vanno propagati subito senza retry.
+ */
+function isNonRetryableStatus(status: number | undefined): boolean {
+  return status === 401 || status === 403;
+}
+
 /** Estrae, se presente, il valore in secondi dell'header Retry-After di una risposta 429. */
 function extractRetryAfterMs(err: unknown): number | undefined {
   const response = (err as { response?: { status?: number; headers?: Record<string, string> } })
@@ -37,6 +51,17 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
+
+      // Chiave non valida (401) o quota/account disabilitato (403): errore
+      // permanente, non ha senso ritentare, falliamo subito.
+      if (isNonRetryableStatus(extractStatus(err))) {
+        logger.warn(
+          `Richiesta fallita con status non ritentabile (401/403), interrompo senza retry`,
+          err
+        );
+        throw err;
+      }
+
       const isLastAttempt = attempt === maxRetries;
       if (isLastAttempt) break;
 

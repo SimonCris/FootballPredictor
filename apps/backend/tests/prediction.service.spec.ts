@@ -4,7 +4,7 @@
  * dai provider dati esterni (funzione pura computePrediction).
  */
 import { computeFormScore, computePrediction } from '../src/services/prediction.service';
-import { Match, TeamForm } from '../src/types/domain';
+import { Match, MarketOdds, Standing, TeamForm } from '../src/types/domain';
 
 function buildMatch(overrides: Partial<Match> = {}): Match {
   return {
@@ -25,6 +25,32 @@ function buildForm(overrides: Partial<TeamForm> = {}): TeamForm {
     lastResults: ['W', 'W', 'D', 'W', 'L'],
     goalsScoredAvg: 1.5,
     goalsConcededAvg: 1.0,
+    ...overrides,
+  };
+}
+
+function buildStanding(overrides: Partial<Standing> = {}): Standing {
+  return {
+    teamId: 'team-1',
+    position: 10,
+    played: 10,
+    won: 4,
+    draw: 3,
+    lost: 3,
+    goalsFor: 12,
+    goalsAgainst: 12,
+    goalDifference: 0,
+    points: 15,
+    ...overrides,
+  };
+}
+
+function buildMarketOdds(overrides: Partial<MarketOdds> = {}): MarketOdds {
+  return {
+    source: 'the-odds-api',
+    bookmakersCount: 6,
+    averageOdds: { home: 2.0, draw: 3.4, away: 3.8 },
+    impliedProbabilities: { home: 0.45, draw: 0.27, away: 0.28 },
     ...overrides,
   };
 }
@@ -162,5 +188,72 @@ describe('computePrediction', () => {
     });
     expect(withDebug.debugMetrics).toBeDefined();
     expect(withDebug.debugMetrics?.expectedGoalsHome).toBeGreaterThan(0);
+  });
+
+  it('una posizione in classifica molto migliore aumenta la probabilità home', () => {
+    const baseInput = {
+      match: buildMatch(),
+      homeForm: buildForm(),
+      awayForm: buildForm({ teamId: 'team-2' }),
+      headToHead: emptyH2H,
+    };
+    const withoutStandings = computePrediction(baseInput);
+    const withFavorableStandings = computePrediction({
+      ...baseInput,
+      homeStanding: buildStanding({ teamId: 'home-1', position: 1 }),
+      awayStanding: buildStanding({ teamId: 'away-1', position: 18 }),
+      leagueSize: 20,
+    });
+    expect(withFavorableStandings.probabilities.home).toBeGreaterThan(
+      withoutStandings.probabilities.home
+    );
+  });
+
+  it('effettua il blend con le probabilità di mercato quando disponibili', () => {
+    const baseInput = {
+      match: buildMatch(),
+      homeForm: buildForm(),
+      awayForm: buildForm({ teamId: 'team-2' }),
+      headToHead: emptyH2H,
+      includeDebug: true,
+    };
+    const withoutMarket = computePrediction(baseInput);
+    // Mercato fortemente sbilanciato verso il pareggio: la probabilità di
+    // pareggio del pronostico finale deve aumentare rispetto al solo modello.
+    const withMarket = computePrediction({
+      ...baseInput,
+      marketOdds: buildMarketOdds({
+        impliedProbabilities: { home: 0.2, draw: 0.6, away: 0.2 },
+      }),
+    });
+    expect(withMarket.probabilities.draw).toBeGreaterThan(withoutMarket.probabilities.draw);
+    expect(withMarket.debugMetrics?.marketBlendWeight).toBeGreaterThan(0);
+    expect(withMarket.stats.marketOdds).toBeDefined();
+  });
+
+  it('senza quote di mercato il peso del blend è zero e le quote non sono presenti nelle stats', () => {
+    const prediction = computePrediction({
+      match: buildMatch(),
+      homeForm: buildForm(),
+      awayForm: buildForm({ teamId: 'team-2' }),
+      headToHead: emptyH2H,
+      includeDebug: true,
+    });
+    expect(prediction.debugMetrics?.marketBlendWeight).toBe(0);
+    expect(prediction.stats.marketOdds).toBeUndefined();
+  });
+
+  it('quando le quote di mercato sono disponibili, la quota stimata coincide con la quota reale del mercato per l\'esito consigliato', () => {
+    const prediction = computePrediction({
+      match: buildMatch(),
+      homeForm: buildForm(),
+      awayForm: buildForm({ teamId: 'team-2' }),
+      headToHead: emptyH2H,
+      marketOdds: buildMarketOdds({
+        averageOdds: { home: 1.5, draw: 4.2, away: 6.1 },
+      }),
+    });
+    const expectedOddsByOutcome = { '1': 1.5, X: 4.2, '2': 6.1 };
+    expect(prediction.estimatedOdds).toBe(expectedOddsByOutcome[prediction.suggestedOutcome]);
   });
 });

@@ -4,7 +4,7 @@
  * il provider primario fallisce, venga usato automaticamente il fallback.
  */
 import { ProviderManager } from '../src/services/provider-manager';
-import { League, Match, MatchProvider, TeamForm } from '../src/types/domain';
+import { League, Match, MatchProvider, Standing, TeamForm } from '../src/types/domain';
 
 function buildLeague(): League {
   return {
@@ -32,6 +32,7 @@ function buildMockProvider(
     getHeadToHead: jest
       .fn()
       .mockResolvedValue({ totalMatches: 0, homeWins: 0, draws: 0, awayWins: 0 }),
+    getStandings: jest.fn().mockResolvedValue([] as Standing[]),
     ...overrides,
   };
 }
@@ -89,5 +90,17 @@ describe('ProviderManager fallback', () => {
 
     expect(fallback.getTeamForm).toHaveBeenCalledTimes(1);
     expect(fallback.getHeadToHead).toHaveBeenCalledTimes(1);
+  });
+
+  it('applica lo stesso meccanismo di fallback a getStandings', async () => {
+    const primary = buildMockProvider('primary', {
+      getStandings: jest.fn().mockRejectedValue(new Error('timeout')),
+    });
+    const fallback = buildMockProvider('fallback');
+    const manager = new ProviderManager([primary, fallback]);
+
+    await manager.getStandings(buildLeague());
+
+    expect(fallback.getStandings).toHaveBeenCalledTimes(1);
   });
 });

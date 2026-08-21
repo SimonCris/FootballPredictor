@@ -47,6 +47,19 @@ export const env = {
 
   cacheTtlMatchday: getEnvInt('CACHE_TTL_MATCHDAY', 900),
   cacheTtlPredictions: getEnvInt('CACHE_TTL_PREDICTIONS', 900),
+  cacheTtlStandings: getEnvInt('CACHE_TTL_STANDINGS', 3600),
+  cacheTtlOdds: getEnvInt('CACHE_TTL_ODDS', 1800),
+
+  // CHANGE_ME: chiave gratuita (free tier 500 richieste/mese, solo email, senza
+  // carta di credito) ottenuta registrandosi su https://the-odds-api.com/
+  // Usata per arricchire i pronostici con le quote reali dei bookmaker
+  // (mercato 1X2), come segnale aggiuntivo oltre al modello statistico.
+  // Se non impostata, il calcolo funziona comunque usando solo il modello
+  // statistico (nessun errore, l'arricchimento viene semplicemente saltato).
+  oddsApiKey: getEnv('ODDS_API_KEY', ''),
+  oddsApiBaseUrl: getEnv('ODDS_API_BASE_URL', 'https://api.the-odds-api.com/v4'),
+  isOddsApiConfigured:
+    !!process.env.ODDS_API_KEY && !process.env.ODDS_API_KEY.startsWith('CHANGE_ME'),
 
   httpTimeoutMs: getEnvInt('HTTP_TIMEOUT_MS', 8000),
   httpMaxRetries: getEnvInt('HTTP_MAX_RETRIES', 2),

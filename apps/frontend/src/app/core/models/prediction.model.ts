@@ -26,6 +26,29 @@ export interface PredictionDebugMetrics {
   homeAdvantageFactor: number;
   expectedGoalsHome: number;
   expectedGoalsAway: number;
+  standingsFactor: number;
+  marketBlendWeight: number;
+  modelProbabilitiesBeforeBlend: { home: number; draw: number; away: number };
+}
+
+export interface Standing {
+  teamId: string;
+  position: number;
+  played: number;
+  won: number;
+  draw: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+}
+
+export interface MarketOdds {
+  source: string;
+  bookmakersCount: number;
+  averageOdds: { home: number; draw: number; away: number };
+  impliedProbabilities: { home: number; draw: number; away: number };
 }
 
 export interface Prediction {
@@ -55,6 +78,11 @@ export interface Prediction {
       home: string[];
       away: string[];
     };
+    standings?: {
+      home?: Standing;
+      away?: Standing;
+    };
+    marketOdds?: MarketOdds;
   };
   debugMetrics?: PredictionDebugMetrics;
 }

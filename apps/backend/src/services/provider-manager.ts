@@ -8,7 +8,7 @@
  * (src/types/domain.ts) e aggiungerlo all'array `providers` nell'ordine di
  * priorità desiderato.
  */
-import { League, Match, MatchProvider, TeamForm } from '../types/domain';
+import { League, Match, MatchProvider, Standing, TeamForm } from '../types/domain';
 import { FootballDataProvider } from '../providers/football-data.provider';
 import { TheSportsDbProvider } from '../providers/thesportsdb.provider';
 import { logger } from '../utils/logger';
@@ -60,6 +60,10 @@ export class ProviderManager {
       (p) => p.getHeadToHead(homeTeamId, awayTeamId),
       'getHeadToHead'
     );
+  }
+
+  async getStandings(league: League): Promise<Standing[]> {
+    return this.withFallback((p) => p.getStandings(league), 'getStandings');
   }
 }
 

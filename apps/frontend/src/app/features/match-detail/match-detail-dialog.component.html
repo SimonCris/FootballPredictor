@@ -31,6 +31,7 @@
     <p class="suggestion">
       <strong>Pronostico consigliato:</strong> {{ outcomeLabel(prediction.suggestedOutcome) }}
       — Quota stimata: <strong>{{ prediction.estimatedOdds }}</strong>
+      <span *ngIf="prediction.stats.marketOdds" class="hint-text">(quota reale di mercato)</span>
       — Confidenza: <strong>{{ prediction.confidence }}/100</strong>
     </p>
 
@@ -65,6 +66,36 @@
       Pareggi: {{ prediction.stats.headToHead.draws }} —
       Vittorie trasferta: {{ prediction.stats.headToHead.awayWins }}
     </p>
+
+    <div *ngIf="prediction.stats.standings?.home || prediction.stats.standings?.away">
+      <mat-divider></mat-divider>
+      <h4>Classifica</h4>
+      <div class="stats-grid">
+        <div *ngIf="prediction.stats.standings?.home as homeStanding">
+          <p>{{ match.homeTeam.name }}: {{ homeStanding.position }}° posto — {{ homeStanding.points }} punti
+            ({{ homeStanding.won }}V {{ homeStanding.draw }}N {{ homeStanding.lost }}P,
+            diff. reti {{ homeStanding.goalDifference }})</p>
+        </div>
+        <div *ngIf="prediction.stats.standings?.away as awayStanding">
+          <p>{{ match.awayTeam.name }}: {{ awayStanding.position }}° posto — {{ awayStanding.points }} punti
+            ({{ awayStanding.won }}V {{ awayStanding.draw }}N {{ awayStanding.lost }}P,
+            diff. reti {{ awayStanding.goalDifference }})</p>
+        </div>
+      </div>
+    </div>
+
+    <div *ngIf="prediction.stats.marketOdds as marketOdds">
+      <mat-divider></mat-divider>
+      <h4>Quote di mercato (fonte: {{ marketOdds.source }}, {{ marketOdds.bookmakersCount }} bookmaker)</h4>
+      <p>
+        1: {{ marketOdds.averageOdds.home }} ({{ (marketOdds.impliedProbabilities.home * 100).toFixed(1) }}%) —
+        X: {{ marketOdds.averageOdds.draw }} ({{ (marketOdds.impliedProbabilities.draw * 100).toFixed(1) }}%) —
+        2: {{ marketOdds.averageOdds.away }} ({{ (marketOdds.impliedProbabilities.away * 100).toFixed(1) }}%)
+      </p>
+      <p class="hint-text">
+        Il pronostico finale combina il modello statistico con queste quote reali di mercato.
+      </p>
+    </div>
 
     <div *ngIf="prediction.stats.injuries">
       <h4>Infortuni / squalifiche</h4>

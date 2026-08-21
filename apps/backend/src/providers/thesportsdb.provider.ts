@@ -9,8 +9,8 @@
  */
 import axios, { AxiosInstance } from 'axios';
 import { env } from '../config/env';
-import { League, Match, MatchProvider, TeamForm } from '../types/domain';
-import { buildCompositeId, average, toIsoUtc } from '../utils/normalize';
+import { League, Match, MatchProvider, Standing, TeamForm } from '../types/domain';
+import { buildCompositeId, average, toIsoUtc, getCurrentFootballSeason } from '../utils/normalize';
 import { withRetry } from '../utils/http-retry';
 import { logger } from '../utils/logger';
 import { RequestQueue } from '../utils/request-queue';
@@ -258,5 +258,58 @@ export class TheSportsDbProvider implements MatchProvider {
       logger.warn('Impossibile calcolare H2H da TheSportsDB, uso valori neutri', err);
       return { totalMatches: 0, homeWins: 0, draws: 0, awayWins: 0 };
     }
+  }
+
+  /**
+   * Recupera la classifica corrente del campionato tramite lookuptable.php.
+   * Come per eventsround.php, la chiave pubblica di test limita il numero di
+   * righe restituite: se la classifica risulta incompleta, il motore
+   * pronostici semplicemente non troverà la standing per alcune squadre e
+   * degraderà con grazia (nessuna posizione = nessun aggiustamento).
+   */
+  async getStandings(league: League): Promise<Standing[]> {
+    const leagueId = league.providerIds.theSportsDb;
+    if (!leagueId) {
+      throw new Error(`Campionato ${league.code} non mappato per TheSportsDB`);
+    }
+
+    const season = getCurrentFootballSeason();
+
+    return withRetry(
+      () =>
+        requestQueue.run(async () => {
+          const { data } = await this.client.get('/lookuptable.php', {
+            params: { l: leagueId, s: season },
+          });
+          const table = (data.table ?? []) as Array<{
+            idTeam: string;
+            intRank: string;
+            intPlayed: string;
+            intWin: string;
+            intDraw: string;
+            intLoss: string;
+            intGoalsFor: string;
+            intGoalsAgainst: string;
+            intGoalDifference: string;
+            intPoints: string;
+          }>;
+
+          return table.map(
+            (row): Standing => ({
+              teamId: buildCompositeId(PROVIDER_NAME, row.idTeam),
+              position: Number(row.intRank),
+              played: Number(row.intPlayed),
+              won: Number(row.intWin),
+              draw: Number(row.intDraw),
+              lost: Number(row.intLoss),
+              goalsFor: Number(row.intGoalsFor),
+              goalsAgainst: Number(row.intGoalsAgainst),
+              goalDifference: Number(row.intGoalDifference),
+              points: Number(row.intPoints),
+            })
+          );
+        }),
+      { maxRetries: env.httpMaxRetries }
+    );
   }
 }

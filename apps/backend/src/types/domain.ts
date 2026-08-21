@@ -19,6 +19,7 @@ export interface League {
   providerIds: {
     footballData?: string; // es. "SA", "PL", "PD" (football-data.org competition code)
     theSportsDb?: string; // es. id lega TheSportsDB
+    oddsApi?: string; // sport key di The Odds API, es. "soccer_italy_serie_a"
   };
 }
 
@@ -39,6 +40,44 @@ export interface TeamForm {
   goalsConcededAvg: number;
   /** Posizione in classifica, se disponibile. */
   leaguePosition?: number;
+}
+
+/** Riga di classifica normalizzata (posizione, punti, statistiche stagionali). */
+export interface Standing {
+  teamId: string;
+  position: number;
+  played: number;
+  won: number;
+  draw: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+}
+
+/**
+ * Quote di mercato aggregate da servizi di betting gratuiti (es. The Odds API,
+ * piano free), usate come segnale aggiuntivo per "correggere" il pronostico
+ * statistico verso il consenso reale dei bookmaker.
+ */
+export interface MarketOdds {
+  /** Nome del servizio da cui provengono le quote (es. "the-odds-api"). */
+  source: string;
+  /** Numero di bookmaker aggregati per calcolare la media. */
+  bookmakersCount: number;
+  /** Quote decimali medie per esito. */
+  averageOdds: {
+    home: number;
+    draw: number;
+    away: number;
+  };
+  /** Probabilità implicite dalle quote medie, "de-vigged" (normalizzate a 100%). */
+  impliedProbabilities: {
+    home: number;
+    draw: number;
+    away: number;
+  };
 }
 
 /** Partita normalizzata, indipendente dal provider di origine. */
@@ -77,6 +116,12 @@ export interface PredictionDebugMetrics {
   homeAdvantageFactor: number;
   expectedGoalsHome: number;
   expectedGoalsAway: number;
+  /** Aggiustamento derivato dalla differenza di posizione in classifica. */
+  standingsFactor: number;
+  /** Peso [0-1] dato alle quote di mercato nel blend con il modello statistico. */
+  marketBlendWeight: number;
+  /** Probabilità del modello statistico prima del blend con il mercato. */
+  modelProbabilitiesBeforeBlend: { home: number; draw: number; away: number };
 }
 
 /** Pronostico calcolato per una partita. */
@@ -112,6 +157,13 @@ export interface Prediction {
       home: string[];
       away: string[];
     };
+    /** Classifica delle due squadre, se disponibile (football-data.org o TheSportsDB). */
+    standings?: {
+      home?: Standing;
+      away?: Standing;
+    };
+    /** Quote di mercato aggregate da servizi di betting gratuiti, se disponibili. */
+    marketOdds?: MarketOdds;
   };
   /** Presente solo in sviluppo (NODE_ENV !== 'production'), per debug del calcolo. */
   debugMetrics?: PredictionDebugMetrics;
@@ -143,4 +195,6 @@ export interface MatchProvider {
     homeTeamId: string,
     awayTeamId: string
   ): Promise<{ totalMatches: number; homeWins: number; draws: number; awayWins: number }>;
+  /** Recupera la classifica corrente del campionato. */
+  getStandings(league: League): Promise<Standing[]>;
 }

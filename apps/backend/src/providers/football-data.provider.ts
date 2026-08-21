@@ -8,7 +8,7 @@
  */
 import axios, { AxiosInstance } from 'axios';
 import { env } from '../config/env';
-import { League, Match, MatchProvider, TeamForm } from '../types/domain';
+import { League, Match, MatchProvider, Standing, TeamForm } from '../types/domain';
 import { buildCompositeId, average, toIsoUtc } from '../utils/normalize';
 import { withRetry } from '../utils/http-retry';
 import { logger } from '../utils/logger';
@@ -36,6 +36,25 @@ interface FdMatch {
   venue?: string;
   homeTeam: FdTeam;
   awayTeam: FdTeam;
+}
+
+/**
+ * Determina il numero della prossima giornata (matchday) a partire da un
+ * elenco di partite SCHEDULED, usando il matchday della partita
+ * cronologicamente più vicina (non il numero di giornata più basso).
+ *
+ * Accetta un tipo minimo (solo `matchday`/`utcDate`) invece di `FdMatch[]`
+ * per restare facilmente testabile senza dover costruire oggetti partita
+ * completi (vedi tests/football-data.provider.spec.ts). Vedi il commento in
+ * getNextMatchday per il razionale completo.
+ */
+export function findNextMatchdayNumber(
+  matches: Array<{ matchday?: number; utcDate: string }>
+): number | undefined {
+  const earliestMatch = matches
+    .filter((m) => typeof m.matchday === 'number')
+    .sort((a, b) => new Date(a.utcDate).getTime() - new Date(b.utcDate).getTime())[0];
+  return earliestMatch?.matchday;
 }
 
 function mapStatus(fdStatus: string): Match['status'] {
@@ -100,11 +119,18 @@ export class FootballDataProvider implements MatchProvider {
           const matches: FdMatch[] = data.matches ?? [];
           if (matches.length === 0) return [];
 
-          // Trova la prima giornata (matchday) futura disponibile e filtra solo quelle partite.
-          const nextMatchday = matches
-            .map((m) => m.matchday)
-            .filter((md): md is number => typeof md === 'number')
-            .sort((a, b) => a - b)[0];
+          // Determina la prossima giornata (matchday) a partire dalla partita
+          // SCHEDULED cronologicamente più vicina, NON dal numero di giornata
+          // più basso: in campionati come LaLiga i numeri di giornata non sono
+          // sempre in ordine cronologico (partite rinviate a causa di
+          // impegni europei/coppe possono slittare a dopo giornate
+          // successive). Usare il numero minimo porterebbe a selezionare una
+          // giornata "vecchia" con solo poche partite rinviate ancora da
+          // giocare, invece della prossima giornata completa. Prendendo il
+          // matchday della partita più vicina nel tempo otteniamo sempre il
+          // turno corretto, con tutte le sue partite (anche se alcune di
+          // quel turno sono già state giocate in anticipo).
+          const nextMatchday = findNextMatchdayNumber(matches);
 
           const filtered = matches.filter((m) => m.matchday === nextMatchday);
 
@@ -216,5 +242,45 @@ export class FootballDataProvider implements MatchProvider {
       logger.warn('Impossibile calcolare H2H da football-data.org, uso valori neutri', err);
       return { totalMatches: 0, homeWins: 0, draws: 0, awayWins: 0 };
     }
+  }
+
+  /**
+   * Recupera la classifica corrente del campionato (GET /competitions/{code}/standings),
+   * usata dal motore pronostici per pesare la forza delle squadre in base alla
+   * posizione in classifica (oltre alla sola forma recente).
+   */
+  async getStandings(league: League): Promise<Standing[]> {
+    this.assertConfigured();
+    const competitionCode = league.providerIds.footballData;
+    if (!competitionCode) {
+      throw new Error(`Campionato ${league.code} non mappato per football-data.org`);
+    }
+
+    return withRetry(
+      () =>
+        requestQueue.run(async () => {
+          const { data } = await this.client.get(`/competitions/${competitionCode}/standings`);
+          // Il piano free restituisce più "tipi" di classifica (TOTAL, HOME, AWAY);
+          // usiamo la classifica generale (TOTAL).
+          const totalTable =
+            (data.standings ?? []).find((s: any) => s.type === 'TOTAL')?.table ?? [];
+
+          return totalTable.map(
+            (row: any): Standing => ({
+              teamId: buildCompositeId(PROVIDER_NAME, row.team.id),
+              position: row.position,
+              played: row.playedGames,
+              won: row.won,
+              draw: row.draw,
+              lost: row.lost,
+              goalsFor: row.goalsFor,
+              goalsAgainst: row.goalsAgainst,
+              goalDifference: row.goalDifference,
+              points: row.points,
+            })
+          );
+        }),
+      { maxRetries: env.httpMaxRetries }
+    );
   }
 }

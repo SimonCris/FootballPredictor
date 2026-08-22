@@ -83,8 +83,9 @@ export class HomeComponent implements OnInit, OnDestroy {
     'time',
     'home',
     'away',
+    'predictionOutcome',
     'odds',
-    'prediction',
+    'detail',
   ];
 
   constructor(
@@ -239,5 +240,33 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   matchDate(match: Match): Date {
     return new Date(match.utcDate);
+  }
+
+  /** Etichetta sintetica (1/X/2) mostrata nella colonna "Pronostico" della tabella. */
+  outcomeLabel(outcome: string): string {
+    switch (outcome) {
+      case '1':
+        return '1';
+      case 'X':
+        return 'X';
+      case '2':
+        return '2';
+      default:
+        return outcome;
+    }
+  }
+
+  /** Etichetta estesa mostrata come tooltip sulla colonna "Pronostico". */
+  outcomeTooltip(outcome: string): string {
+    switch (outcome) {
+      case '1':
+        return 'Vittoria squadra di casa';
+      case 'X':
+        return 'Pareggio';
+      case '2':
+        return 'Vittoria squadra ospite';
+      default:
+        return '';
+    }
   }
 }

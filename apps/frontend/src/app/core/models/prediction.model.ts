@@ -69,6 +69,72 @@ export interface MarketOdds {
   spreads?: AsianHandicapMarketOdds;
 }
 
+export interface MarketPick {
+  outcome: string;
+  label: string;
+  probability: number;
+}
+
+export interface OverUnderLineEntry {
+  line: number;
+  over: number;
+  under: number;
+}
+
+export interface MultigoalRangeEntry {
+  label: string;
+  min: number;
+  max: number;
+  probability: number;
+}
+
+export interface HalfTimeFullTimeEntry {
+  half: MatchOutcome;
+  full: MatchOutcome;
+  label: string;
+  probability: number;
+}
+
+export interface ExactGoalsEntry {
+  goals: number;
+  label: string;
+  probability: number;
+}
+
+export interface ComboMarketEntry {
+  label: string;
+  probability: number;
+}
+
+export interface PredictionMarkets {
+  matchResult1x2: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  doubleChance: { oneOrDraw: number; drawOrTwo: number; oneOrTwo: number; pick: MarketPick };
+  halfTimeResult: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  secondHalfResult: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  halfTimeFullTime: { entries: HalfTimeFullTimeEntry[]; pick: HalfTimeFullTimeEntry };
+  overUnder: { lines: OverUnderLineEntry[]; pick: MarketPick };
+  bothTeamsToScore: { yes: number; no: number; pick: MarketPick };
+  multigoal: { ranges: MultigoalRangeEntry[]; pick: MultigoalRangeEntry };
+  teamToScore: { home: MarketPick; away: MarketPick };
+  exactTotalGoals: { entries: ExactGoalsEntry[]; pick: ExactGoalsEntry };
+  combos: {
+    resultAndOverUnder: ComboMarketEntry;
+    resultAndBtts: ComboMarketEntry;
+    doubleChanceAndBtts: ComboMarketEntry;
+    multigoalAndResult: ComboMarketEntry;
+  };
+}
+
+export interface BestPick {
+  marketKey: string;
+  marketLabel: string;
+  outcomeLabel: string;
+  probability: number;
+  confidence: number;
+  estimatedOdds: number;
+}
+
+
 export interface Prediction {
   matchId: string;
   probabilities: {
@@ -115,6 +181,13 @@ export interface Prediction {
     marketOdds?: MarketOdds;
   };
   debugMetrics?: PredictionDebugMetrics;
+  markets: PredictionMarkets;
+  bestPick: BestPick;
+  /** true se il motore ha usato valori neutri di fallback per mancanza di dati (forma squadre non disponibile). */
+  dataQuality: {
+    insufficientData: boolean;
+    reasons: string[];
+  };
 }
 
 export interface MatchPredictionResponse {

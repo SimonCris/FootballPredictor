@@ -63,6 +63,11 @@
         <th mat-header-cell *matHeaderCellDef>Pronostico</th>
         <td mat-cell *matCellDef="let entry">
           {{ outcomeLabel(entry.prediction.suggestedOutcome) }}
+          <mat-icon
+            *ngIf="entry.prediction.dataQuality?.insufficientData"
+            class="insufficient-data-icon"
+            matTooltip="Dati insufficienti: forma recente non disponibile per una o entrambe le squadre, pronostico meno affidabile"
+          >warning</mat-icon>
         </td>
       </ng-container>
 

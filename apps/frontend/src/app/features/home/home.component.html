@@ -94,6 +94,15 @@
           >
             {{ outcomeLabel($any(predictionsByMatchId[match.id]).suggestedOutcome) }}
           </span>
+          <mat-icon
+            *ngIf="
+              predictionsByMatchId[match.id] !== 'loading' &&
+              predictionsByMatchId[match.id] !== 'error' &&
+              $any(predictionsByMatchId[match.id]).dataQuality?.insufficientData
+            "
+            class="insufficient-data-icon"
+            matTooltip="Dati insufficienti: forma recente non disponibile per una o entrambe le squadre, pronostico meno affidabile"
+          >warning</mat-icon>
         </td>
       </ng-container>
 

@@ -12,6 +12,29 @@
   <p *ngIf="error" class="error-text">{{ error }}</p>
 
   <div *ngIf="prediction && match">
+    <div class="best-pick-box" *ngIf="prediction.bestPick as bestPick">
+      <p class="best-pick-title">Pronostico più probabile e sicuro ({{ bestPick.marketLabel }})</p>
+      <p class="best-pick-value">
+        {{ bestPick.outcomeLabel }} — {{ bestPick.probability }}% (confidenza {{ bestPick.confidence }}/100,
+        quota stimata {{ bestPick.estimatedOdds }})
+      </p>
+    </div>
+
+    <div class="insufficient-data-badge" *ngIf="prediction.dataQuality?.insufficientData">
+      <span class="badge-icon">⚠️</span>
+      <div>
+        <p class="badge-title">Dati insufficienti</p>
+        <p class="badge-text">
+          Forma recente non disponibile per una o entrambe le squadre: alcuni mercati (es. Esito PT/ST,
+          Parziale/Finale) sono calcolati su valori neutri di riferimento e possono coincidere con quelli
+          di altre partite. Affidabilità ridotta.
+        </p>
+        <ul class="badge-reasons">
+          <li *ngFor="let reason of prediction.dataQuality.reasons">{{ reason }}</li>
+        </ul>
+      </div>
+    </div>
+
     <h3>Probabilità esito (1X2)</h3>
     <div class="probabilities-row">
       <div class="prob-box" [class.highlight]="prediction.suggestedOutcome === '1'">
@@ -29,7 +52,7 @@
     </div>
 
     <p class="suggestion">
-      <strong>Pronostico consigliato:</strong> {{ outcomeLabel(prediction.suggestedOutcome) }}
+      <strong>Pronostico 1X2 consigliato:</strong> {{ outcomeLabel(prediction.suggestedOutcome) }}
       — Quota stimata: <strong>{{ prediction.estimatedOdds }}</strong>
       <span *ngIf="prediction.stats.marketOdds" class="hint-text">(quota reale di mercato)</span>
       — Confidenza: <strong>{{ prediction.confidence }}/100</strong>
@@ -56,6 +79,106 @@
       12: {{ prediction.doubleChance.oneOrTwo }}%
       <span class="hint-text">(derivata sommando le probabilità 1X2 finali)</span>
     </p>
+
+    <mat-divider></mat-divider>
+
+    <div class="markets-section" *ngIf="prediction.markets as markets">
+      <h3>Tutti i mercati calcolati</h3>
+
+      <h4>Esito primo tempo / secondo tempo</h4>
+      <table class="markets-table">
+        <tr><th>Periodo</th><th>1</th><th>X</th><th>2</th><th>Pronostico</th></tr>
+        <tr>
+          <td>Primo tempo</td>
+          <td>{{ markets.halfTimeResult.probabilities.home }}%</td>
+          <td>{{ markets.halfTimeResult.probabilities.draw }}%</td>
+          <td>{{ markets.halfTimeResult.probabilities.away }}%</td>
+          <td>{{ markets.halfTimeResult.pick.outcome }} ({{ markets.halfTimeResult.pick.probability }}%)</td>
+        </tr>
+        <tr>
+          <td>Secondo tempo</td>
+          <td>{{ markets.secondHalfResult.probabilities.home }}%</td>
+          <td>{{ markets.secondHalfResult.probabilities.draw }}%</td>
+          <td>{{ markets.secondHalfResult.probabilities.away }}%</td>
+          <td>{{ markets.secondHalfResult.pick.outcome }} ({{ markets.secondHalfResult.pick.probability }}%)</td>
+        </tr>
+      </table>
+
+      <h4>Parziale/Finale</h4>
+      <table class="markets-table">
+        <tr><th>Combinazione</th><th>Probabilità</th></tr>
+        <tr *ngFor="let entry of markets.halfTimeFullTime.entries" [class.highlight]="entry === markets.halfTimeFullTime.pick">
+          <td>{{ entry.label }}</td>
+          <td>{{ entry.probability }}%</td>
+        </tr>
+      </table>
+
+      <h4>Under/Over multi-linea</h4>
+      <table class="markets-table">
+        <tr><th>Linea</th><th>Over</th><th>Under</th></tr>
+        <tr *ngFor="let line of markets.overUnder.lines">
+          <td>{{ line.line }}</td>
+          <td [class.highlight]="markets.overUnder.pick.outcome === 'OVER_' + line.line">{{ line.over }}%</td>
+          <td [class.highlight]="markets.overUnder.pick.outcome === 'UNDER_' + line.line">{{ line.under }}%</td>
+        </tr>
+      </table>
+
+      <h4>Multigol</h4>
+      <table class="markets-table">
+        <tr><th>Intervallo</th><th>Probabilità</th></tr>
+        <tr *ngFor="let range of markets.multigoal.ranges" [class.highlight]="range === markets.multigoal.pick">
+          <td>{{ range.label }} gol</td>
+          <td>{{ range.probability }}%</td>
+        </tr>
+      </table>
+
+      <h4>Squadra segna</h4>
+      <table class="markets-table">
+        <tr><th>Squadra</th><th>Probabilità di segnare</th></tr>
+        <tr>
+          <td>{{ match.homeTeam.name }} (casa)</td>
+          <td>{{ markets.teamToScore.home.probability }}%</td>
+        </tr>
+        <tr>
+          <td>{{ match.awayTeam.name }} (trasferta)</td>
+          <td>{{ markets.teamToScore.away.probability }}%</td>
+        </tr>
+      </table>
+
+      <h4>Somma gol esatta</h4>
+      <table class="markets-table">
+        <tr><th>Gol totali</th><th>Probabilità</th></tr>
+        <tr *ngFor="let entry of markets.exactTotalGoals.entries" [class.highlight]="entry === markets.exactTotalGoals.pick">
+          <td>{{ entry.label }}</td>
+          <td>{{ entry.probability }}%</td>
+        </tr>
+      </table>
+
+      <h4>Mercati combo</h4>
+      <table class="markets-table">
+        <tr><th>Combinazione</th><th>Pronostico</th><th>Probabilità</th></tr>
+        <tr>
+          <td>1X2 + Under/Over</td>
+          <td>{{ markets.combos.resultAndOverUnder.label }}</td>
+          <td>{{ markets.combos.resultAndOverUnder.probability }}%</td>
+        </tr>
+        <tr>
+          <td>Esito + Gol/NoGol</td>
+          <td>{{ markets.combos.resultAndBtts.label }}</td>
+          <td>{{ markets.combos.resultAndBtts.probability }}%</td>
+        </tr>
+        <tr>
+          <td>Doppia chance + Gol/NoGol</td>
+          <td>{{ markets.combos.doubleChanceAndBtts.label }}</td>
+          <td>{{ markets.combos.doubleChanceAndBtts.probability }}%</td>
+        </tr>
+        <tr>
+          <td>Multigol + esito</td>
+          <td>{{ markets.combos.multigoalAndResult.label }}</td>
+          <td>{{ markets.combos.multigoalAndResult.probability }}%</td>
+        </tr>
+      </table>
+    </div>
 
     <mat-divider></mat-divider>
 

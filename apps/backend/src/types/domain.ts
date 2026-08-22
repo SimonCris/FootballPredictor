@@ -221,6 +221,125 @@ export interface Prediction {
   };
   /** Presente solo in sviluppo (NODE_ENV !== 'production'), per debug del calcolo. */
   debugMetrics?: PredictionDebugMetrics;
+  /** Tutti i mercati aggiuntivi calcolati dal motore (1T/2T, parziale/finale, multigol, combo, ecc.). */
+  markets: PredictionMarkets;
+  /** Il pronostico più probabile e sicuro tra tutti i mercati calcolati. */
+  bestPick: BestPick;
+  /**
+   * Indica se il motore ha dovuto ricorrere a valori neutri di fallback per
+   * mancanza di dati (forma recente non disponibile per una o entrambe le
+   * squadre). Quando true, tutti i mercati derivati dai gol attesi (in
+   * particolare Esito PT/ST e Parziale/Finale) sono meno affidabili e, se il
+   * fallback scatta per più partite, possono risultare identici tra loro
+   * perché calcolati sugli stessi gol attesi "neutri" (media di lega).
+   */
+  dataQuality: {
+    insufficientData: boolean;
+    /** Motivi del fallback (es. "Forma squadra di casa non disponibile"). */
+    reasons: string[];
+  };
+}
+
+/**
+ * Struttura generica di una "scelta" (pick) su un mercato: l'esito
+ * consigliato per quel mercato, la sua etichetta leggibile e la probabilità
+ * associata (percentuale 0-100).
+ */
+export interface MarketPick {
+  outcome: string;
+  label: string;
+  probability: number;
+}
+
+/** Riga del mercato Over/Under per una linea specifica di gol (es. 1.5, 2.5). */
+export interface OverUnderLineEntry {
+  line: number;
+  over: number;
+  under: number;
+}
+
+/** Intervallo del mercato Multigol (es. "1-3" gol totali). */
+export interface MultigoalRangeEntry {
+  label: string;
+  min: number;
+  max: number;
+  probability: number;
+}
+
+/** Combinazione Parziale/Finale (es. "1/2" = casa in vantaggio al PT, trasferta vince al FT). */
+export interface HalfTimeFullTimeEntry {
+  half: MatchOutcome;
+  full: MatchOutcome;
+  label: string;
+  probability: number;
+}
+
+/** Riga del mercato "somma gol esatta" (0, 1, 2, ... 6+). */
+export interface ExactGoalsEntry {
+  goals: number;
+  label: string;
+  probability: number;
+}
+
+/** Voce di un mercato combo (es. "1 + Over 2.5"), con la probabilità congiunta esatta. */
+export interface ComboMarketEntry {
+  label: string;
+  probability: number;
+}
+
+/**
+ * Tutti i mercati calcolabili dal motore statistico a partire dalle stesse
+ * statistiche raccolte (forma, scontri diretti, classifica, quote di
+ * mercato). Vedi services/markets.service.ts per il dettaglio del calcolo di
+ * ciascun mercato.
+ */
+export interface PredictionMarkets {
+  /** Esito 1X2 (identico a `Prediction.probabilities`/`suggestedOutcome`, riportato qui per uniformità). */
+  matchResult1x2: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  /** Doppia chance 1X / X2 / 12. */
+  doubleChance: { oneOrDraw: number; drawOrTwo: number; oneOrTwo: number; pick: MarketPick };
+  /** Esito primo tempo (1/X/2 solo PT). */
+  halfTimeResult: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  /** Esito secondo tempo (1/X/2 solo ST). */
+  secondHalfResult: { probabilities: { home: number; draw: number; away: number }; pick: MarketPick };
+  /** Parziale/Finale: le 9 combinazioni PT/FT con la più probabile evidenziata. */
+  halfTimeFullTime: { entries: HalfTimeFullTimeEntry[]; pick: HalfTimeFullTimeEntry };
+  /** Under/Over su più linee (0.5, 1.5, 2.5, 3.5), con la combinazione linea+direzione più probabile. */
+  overUnder: { lines: OverUnderLineEntry[]; pick: MarketPick };
+  /** Gol/No Gol (Both Teams To Score), identico a `Prediction.bothTeamsToScore`. */
+  bothTeamsToScore: { yes: number; no: number; pick: MarketPick };
+  /** Multigol: intervalli di gol totali (es. 1-3, 2-4). */
+  multigoal: { ranges: MultigoalRangeEntry[]; pick: MultigoalRangeEntry };
+  /** Squadra segna: probabilità che casa/trasferta segnino almeno un gol. */
+  teamToScore: { home: MarketPick; away: MarketPick };
+  /** Somma gol esatta: distribuzione di probabilità sul totale gol (0,1,2,...,6+). */
+  exactTotalGoals: { entries: ExactGoalsEntry[]; pick: ExactGoalsEntry };
+  /** Mercati combo (combinazioni), calcolati come probabilità congiunta esatta dalla griglia di Poisson. */
+  combos: {
+    /** 1X2 + Under/Over 2.5, es. "1 + Over 2.5". */
+    resultAndOverUnder: ComboMarketEntry;
+    /** Esito + Gol/NoGol, es. "1 + GG". */
+    resultAndBtts: ComboMarketEntry;
+    /** Doppia chance + Gol/NoGol, es. "1X + GG". */
+    doubleChanceAndBtts: ComboMarketEntry;
+    /** Multigol + esito, es. "1X2: 1 + Multigol 1-3". */
+    multigoalAndResult: ComboMarketEntry;
+  };
+}
+
+/**
+ * Il pronostico complessivamente più probabile e sicuro tra tutti i mercati
+ * calcolati (vedi `PredictionMarkets`), scelto bilanciando probabilità e
+ * margine di sicurezza (scarto dalla seconda opzione più probabile dello
+ * stesso mercato).
+ */
+export interface BestPick {
+  marketKey: string;
+  marketLabel: string;
+  outcomeLabel: string;
+  probability: number;
+  confidence: number;
+  estimatedOdds: number;
 }
 
 /** Voce della classifica Top Pronostici. */

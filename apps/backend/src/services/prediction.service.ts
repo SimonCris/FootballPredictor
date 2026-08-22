@@ -60,6 +60,7 @@ import {
   TeamForm,
 } from '../types/domain';
 import { roundTo } from '../utils/normalize';
+import { computeAllMarkets } from './markets.service';
 import { providerManager } from './provider-manager';
 import { oddsProvider } from '../providers/odds.provider';
 import { getOrSetCache } from './cache.service';
@@ -343,10 +344,39 @@ export function computePrediction({
   includeDebug,
 }: PredictionInput): Prediction {
   // Step 1: forza attacco/difesa normalizzata sulla media gol di lega.
+  // NB: quando goalsScoredAvg/goalsConcededAvg sono 0 (nessuna partita
+  // recente disponibile dal provider, es. rate-limit o squadra senza
+  // storico), il fallback "|| 1" azzera l'informazione e riporta la
+  // squadra a una forza neutra (uguale alla media di lega). Questo è
+  // rilevato più sotto e segnalato tramite `dataQuality.insufficientData`
+  // invece di essere nascosto, perché produce mercati derivati (PT/ST,
+  // Parziale/Finale) identici tra partite diverse quando scatta per più
+  // incontri.
   const homeAttackStrength = homeForm.goalsScoredAvg / LEAGUE_AVG_GOALS_PER_TEAM || 1;
   const homeDefenseStrength = homeForm.goalsConcededAvg / LEAGUE_AVG_GOALS_PER_TEAM || 1;
   const awayAttackStrength = awayForm.goalsScoredAvg / LEAGUE_AVG_GOALS_PER_TEAM || 1;
   const awayDefenseStrength = awayForm.goalsConcededAvg / LEAGUE_AVG_GOALS_PER_TEAM || 1;
+
+  // Rilevamento "dati insufficienti": nessun risultato recente e/o media gol
+  // nulla per una delle due squadre (il che fa scattare il fallback neutro
+  // sopra). Segnaliamo il motivo specifico per trasparenza in UI.
+  const insufficientDataReasons: string[] = [];
+  if (homeForm.lastResults.length === 0) {
+    insufficientDataReasons.push('Forma recente della squadra di casa non disponibile');
+  }
+  if (awayForm.lastResults.length === 0) {
+    insufficientDataReasons.push('Forma recente della squadra in trasferta non disponibile');
+  }
+  if (!homeForm.goalsScoredAvg && !homeForm.goalsConcededAvg && homeForm.lastResults.length > 0) {
+    insufficientDataReasons.push('Statistiche gol della squadra di casa non disponibili');
+  }
+  if (!awayForm.goalsScoredAvg && !awayForm.goalsConcededAvg && awayForm.lastResults.length > 0) {
+    insufficientDataReasons.push('Statistiche gol della squadra in trasferta non disponibili');
+  }
+  const dataQuality = {
+    insufficientData: insufficientDataReasons.length > 0,
+    reasons: insufficientDataReasons,
+  };
 
   // Step 2: punteggio di forma recente pesato (0-1), usato come piccolo aggiustamento.
   const homeFormScore = computeFormScore(homeForm.lastResults);
@@ -507,6 +537,26 @@ export function computePrediction({
   // "equa" del modello statistico corretta dal margine bookmaker tipico.
   const estimatedOdds = calculateFairOdds(topProbability, marketOdds, suggestedOutcome);
 
+  // Step 13: calcola tutti i mercati aggiuntivi (1T/2T, parziale/finale,
+  // Under/Over multi-linea, multigol, somma gol esatta, combo) a partire
+  // dagli stessi gol attesi e dalle stesse probabilità finali già calcolate
+  // sopra, ed evidenzia il pronostico complessivamente più probabile e
+  // sicuro tra tutti i mercati (vedi markets.service.ts).
+  const { markets, bestPick } = computeAllMarkets({
+    expectedGoalsHome,
+    expectedGoalsAway,
+    finalProbabilities: probabilities,
+    finalDoubleChance: {
+      oneOrDraw: doubleChance.oneOrDraw,
+      drawOrTwo: doubleChance.drawOrTwo,
+      oneOrTwo: doubleChance.oneOrTwo,
+    },
+    finalBtts: { yes: bothTeamsToScore.probabilityYes, no: bothTeamsToScore.probabilityNo },
+    mainEstimatedOdds: estimatedOdds,
+    mainConfidence: confidence,
+    insufficientData: dataQuality.insufficientData,
+  });
+
   const prediction: Prediction = {
     matchId: match.id,
     probabilities,
@@ -516,6 +566,9 @@ export function computePrediction({
     bothTeamsToScore,
     confidence,
     estimatedOdds,
+    markets,
+    bestPick,
+    dataQuality,
     stats: {
       homeForm,
       awayForm,
